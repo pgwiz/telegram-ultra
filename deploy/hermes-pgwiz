@@ -436,6 +436,11 @@ do_update() {
     # 9. Reinstall service files (may have changed)
     install_services
 
+    # 9b. Ensure hermes user has journal access (for log viewer)
+    if getent group systemd-journal &>/dev/null; then
+        usermod -aG systemd-journal hermes 2>/dev/null || true
+    fi
+
     # 10. Restart services
     restart_services
 

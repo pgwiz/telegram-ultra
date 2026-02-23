@@ -21,6 +21,7 @@ ProtectSystem=strict
 ProtectHome=true
 ReadWritePaths=/opt/hermes
 PrivateTmp=true
+SupplementaryGroups=systemd-journal
 
 [Install]
 WantedBy=multi-user.target
