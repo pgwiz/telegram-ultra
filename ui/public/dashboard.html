@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Hermes - Dashboard</title>
+    <link rel="stylesheet" href="/assets/style.css">
+</head>
+<body>
+    <!-- Navbar -->
+    <nav class="navbar">
+        <span class="navbar-brand">Hermes Download Nexus</span>
+        <div class="navbar-links">
+            <span class="session-expiry" id="sessionTimer"></span>
+            <a href="#" onclick="hermesLogout(); return false;">Logout</a>
+        </div>
+    </nav>
+
+    <!-- Sidebar -->
+    <aside class="sidebar" id="sidebar">
+        <ul class="sidebar-nav">
+            <li class="active"><a href="/dashboard.html">Dashboard</a></li>
+            <li><a href="/files.html">Downloads</a></li>
+            <li><a href="/scheduler.html">Scheduler</a></li>
+            <li class="sidebar-section">Administration</li>
+            <li id="adminLink" style="display:none"><a href="/admin.html">Admin Panel</a></li>
+        </ul>
+    </aside>
+
+    <!-- Main -->
+    <main class="main-content">
+        <!-- Quick Download -->
+        <div class="card" style="margin-bottom:24px">
+            <div class="card-header" style="display:flex; justify-content:space-between; align-items:center">
+                <span>Quick Download</span>
+                <button class="btn btn-sm" onclick="toggleBatchMode()" id="batchToggle" style="font-size:0.85em">Batch Mode</button>
+            </div>
+
+            <!-- Single URL mode -->
+            <div id="singleMode">
+                <div style="display:flex; gap:12px; align-items:flex-end; flex-wrap:wrap">
+                    <div class="form-group" style="flex:1; min-width:250px; margin-bottom:0">
+                        <label class="form-label" for="quickUrl">YouTube URL</label>
+                        <input type="text" id="quickUrl" class="form-input" placeholder="https://youtube.com/watch?v=...">
+                    </div>
+                    <div class="form-group" style="margin-bottom:0">
+                        <label class="form-label" for="quickType">Type</label>
+                        <select id="quickType" class="form-input" style="width:120px">
+                            <option value="audio">Audio</option>
+                            <option value="video">Video</option>
+                        </select>
+                    </div>
+                    <button class="btn btn-gold" onclick="submitQuickDownload()" id="quickDownloadBtn">Download</button>
+                </div>
+            </div>
+
+            <!-- Batch URL mode -->
+            <div id="batchMode" style="display:none">
+                <div class="form-group" style="margin-bottom:12px">
+                    <label class="form-label" for="batchUrls">Paste URLs (one per line, max 20)</label>
+                    <textarea id="batchUrls" class="form-input" rows="6" placeholder="https://youtube.com/watch?v=...&#10;https://youtube.com/watch?v=...&#10;https://youtu.be/..."></textarea>
+                </div>
+                <div style="display:flex; gap:12px; align-items:center">
+                    <div class="form-group" style="margin-bottom:0">
+                        <label class="form-label" for="batchType">Type</label>
+                        <select id="batchType" class="form-input" style="width:120px">
+                            <option value="audio">Audio</option>
+                            <option value="video">Video</option>
+                        </select>
+                    </div>
+                    <button class="btn btn-gold" onclick="submitBatchDownload()" id="batchDownloadBtn">Queue All</button>
+                    <span id="batchCount" style="color:var(--grecian-gold); font-size:0.9em"></span>
+                </div>
+            </div>
+        </div>
+
+        <h2 style="font-family:var(--font-heading); margin-bottom:20px; color:var(--marble-white)">Task Dashboard</h2>
+
+        <!-- Tabs -->
+        <div class="tabs" id="taskTabs">
+            <div class="tab active" data-filter="all" onclick="setTab('all')">All <span class="tab-count" id="countAll"></span></div>
+            <div class="tab" data-filter="running" onclick="setTab('running')">Running <span class="tab-count" id="countRunning"></span></div>
+            <div class="tab" data-filter="queued" onclick="setTab('queued')">Queued <span class="tab-count" id="countQueued"></span></div>
+            <div class="tab" data-filter="done" onclick="setTab('done')">Done <span class="tab-count" id="countDone"></span></div>
+            <div class="tab" data-filter="error" onclick="setTab('error')">Error <span class="tab-count" id="countError"></span></div>
+            <div class="tab" data-filter="cancelled" onclick="setTab('cancelled')">Cancelled <span class="tab-count" id="countCancelled"></span></div>
+        </div>
+
+        <!-- Task List -->
+        <div id="taskList">
+            <div class="loading"><div class="spinner"></div><p>Loading tasks...</p></div>
+        </div>
+    </main>
+
+    <div class="toast-container" id="toasts"></div>
+    <script src="/assets/app.js"></script>
+    <script>
+        hermesInit('dashboard');
+
+        let batchActive = false;
+
+        function toggleBatchMode() {
+            batchActive = !batchActive;
+            document.getElementById('singleMode').style.display = batchActive ? 'none' : '';
+            document.getElementById('batchMode').style.display = batchActive ? '' : 'none';
+            document.getElementById('batchToggle').textContent = batchActive ? 'Single Mode' : 'Batch Mode';
+        }
+
+        async function submitQuickDownload() {
+            const url = document.getElementById('quickUrl').value.trim();
+            const type = document.getElementById('quickType').value;
+            if (!url) { showToast('Please enter a URL', 'error'); return; }
+            const btn = document.getElementById('quickDownloadBtn');
+            btn.disabled = true; btn.textContent = 'Queuing...';
+            try {
+                const resp = await fetch('/api/download', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + localStorage.getItem('hermes_token') },
+                    body: JSON.stringify({ url, download_type: type })
+                });
+                const data = await resp.json();
+                if (resp.ok) {
+                    showToast('Download queued!', 'success');
+                    document.getElementById('quickUrl').value = '';
+                    loadTasks();
+                } else {
+                    showToast(data.error || 'Failed to queue', 'error');
+                }
+            } catch (e) { showToast('Network error', 'error'); }
+            finally { btn.disabled = false; btn.textContent = 'Download'; }
+        }
+
+        async function submitBatchDownload() {
+            const text = document.getElementById('batchUrls').value.trim();
+            const type = document.getElementById('batchType').value;
+            const urls = text.split('\n').map(u => u.trim()).filter(u => u.length > 0);
+            if (urls.length === 0) { showToast('Paste at least one URL', 'error'); return; }
+            if (urls.length > 20) { showToast('Maximum 20 URLs per batch', 'error'); return; }
+            const btn = document.getElementById('batchDownloadBtn');
+            btn.disabled = true; btn.textContent = 'Queuing...';
+            try {
+                const resp = await fetch('/api/download/batch', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + localStorage.getItem('hermes_token') },
+                    body: JSON.stringify({ urls, download_type: type })
+                });
+                const data = await resp.json();
+                if (resp.ok) {
+                    showToast(`${data.created} downloads queued` + (data.failed > 0 ? `, ${data.failed} failed` : ''), data.failed > 0 ? 'warning' : 'success');
+                    document.getElementById('batchUrls').value = '';
+                    document.getElementById('batchCount').textContent = '';
+                    loadTasks();
+                } else {
+                    showToast(data.error || 'Batch failed', 'error');
+                }
+            } catch (e) { showToast('Network error', 'error'); }
+            finally { btn.disabled = false; btn.textContent = 'Queue All'; }
+        }
+
+        document.getElementById('quickUrl').addEventListener('keydown', function(e) {
+            if (e.key === 'Enter') submitQuickDownload();
+        });
+        document.getElementById('batchUrls').addEventListener('input', function() {
+            const count = this.value.split('\n').filter(l => l.trim().length > 0).length;
+            document.getElementById('batchCount').textContent = count > 0 ? count + ' URL' + (count > 1 ? 's' : '') : '';
+        });
+    </script>
+</body>
+</html>

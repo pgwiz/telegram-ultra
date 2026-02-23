@@ -1,0 +1,27 @@
+[Unit]
+Description=Hermes Download Nexus - Web Dashboard UI
+After=network.target hermes-api.service
+Wants=hermes-api.service
+
+[Service]
+Type=simple
+User=hermes
+Group=hermes
+WorkingDirectory=/opt/hermes/ui
+EnvironmentFile=/opt/hermes/.env
+ExecStart=/usr/bin/node /opt/hermes/ui/server.js
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=hermes-ui
+
+# Security hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/hermes
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

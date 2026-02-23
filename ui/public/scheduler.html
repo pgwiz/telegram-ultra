@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Hermes - Scheduler</title>
+    <link rel="stylesheet" href="/assets/style.css">
+</head>
+<body>
+    <!-- Navbar -->
+    <nav class="navbar">
+        <span class="navbar-brand">Hermes Download Nexus</span>
+        <div class="navbar-links">
+            <span class="session-expiry" id="sessionTimer"></span>
+            <a href="#" onclick="hermesLogout(); return false;">Logout</a>
+        </div>
+    </nav>
+
+    <!-- Sidebar -->
+    <aside class="sidebar" id="sidebar">
+        <ul class="sidebar-nav">
+            <li><a href="/dashboard.html">Dashboard</a></li>
+            <li><a href="/files.html">Downloads</a></li>
+            <li class="active"><a href="/scheduler.html">Scheduler</a></li>
+            <li class="sidebar-section">Administration</li>
+            <li id="adminLink" style="display:none"><a href="/admin.html">Admin Panel</a></li>
+        </ul>
+    </aside>
+
+    <!-- Main -->
+    <main class="main-content">
+        <h2 style="font-family:var(--font-heading); margin-bottom:20px; color:var(--marble-white)">Download Scheduler</h2>
+
+        <div class="card">
+            <div class="card-header">Schedule a Download</div>
+            <div class="form-group">
+                <label class="form-label" for="schedUrl">YouTube URL</label>
+                <input type="text" id="schedUrl" class="form-input" placeholder="https://youtube.com/watch?v=...">
+            </div>
+            <div style="display:flex; gap:12px">
+                <div class="form-group" style="flex:1">
+                    <label class="form-label" for="schedDate">Date</label>
+                    <input type="date" id="schedDate" class="form-input">
+                </div>
+                <div class="form-group" style="flex:1">
+                    <label class="form-label" for="schedTime">Time</label>
+                    <input type="time" id="schedTime" class="form-input">
+                </div>
+            </div>
+            <button class="btn btn-gold" onclick="scheduleDownload()">Queue Download</button>
+        </div>
+
+        <div class="card" style="margin-top:16px">
+            <div class="card-header">Scheduled Tasks</div>
+            <div id="scheduledList">
+                <div class="empty-state">
+                    <h3>No scheduled downloads</h3>
+                    <p>Use the form above to schedule a download.</p>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <div class="toast-container" id="toasts"></div>
+    <script src="/assets/app.js"></script>
+    <script>
+        hermesInit('scheduler');
+
+        function scheduleDownload() {
+            showToast('Scheduler coming soon. Use /download in Telegram for now.', 'info');
+        }
+    </script>
+</body>
+</html>

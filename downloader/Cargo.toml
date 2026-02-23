@@ -1,0 +1,14 @@
+[package]
+name = "hermes-downloader"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+hermes-shared = { path = "../shared" }
+
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+anyhow = { workspace = true }
+reqwest = { workspace = true }

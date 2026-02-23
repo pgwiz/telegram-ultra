@@ -1,0 +1,368 @@
+"""
+Playlist download handler
+Handles YouTube playlist batch downloads with named folders and archives
+"""
+
+import os
+import sys
+import json
+import subprocess
+import logging
+import asyncio
+import zipfile
+import re
+from typing import List, Dict, Any, Optional
+from worker.config import config
+from worker.ipc import IPCHandler
+from worker.cookies import get_yt_dlp_cookie_args
+from worker.utils import sanitize_filename, sanitize_folder_name, safe_mkdir, safe_rmtree
+from worker.error_handlers import categorize_error, get_error
+from worker.progress_hooks import StreamProgressCollector
+
+
+logger = logging.getLogger(__name__)
+
+
+async def handle_playlist_download(ipc: IPCHandler, task_id: str, request: dict) -> None:
+    """
+    Download YouTube playlist.
+
+    IPC Request format:
+    {
+        "task_id": "uuid",
+        "action": "playlist",
+        "url": "https://www.youtube.com/playlist?list=...",
+        "params": {
+            "extract_audio": true,
+            "audio_format": "mp3",
+            "output_dir": "/path/to/output",
+            "archive_max_size_mb": 100
+        }
+    }
+
+    Response format:
+    {
+        "task_id": "uuid",
+        "event": "done",
+        "data": {
+            "playlist_name": "My Playlist",
+            "total_tracks_downloaded": 25,
+            "archives": [
+                {"name": "Playlist - My Playlist-part01.zip", "size_mb": 99.5},
+                {"name": "Playlist - My Playlist-part02.zip", "size_mb": 87.3}
+            ],
+            "folder_path": "/downloads/playlists/My Playlist"
+        }
+    }
+
+    Args:
+        ipc: IPC handler for responses
+        task_id: Task identifier
+        request: IPC request dictionary
+    """
+    try:
+        url = request.get('url', '').strip()
+        params = request.get('params', {})
+
+        if not url:
+            ipc.send_error(task_id, "Missing 'url' parameter", 'INVALID_URL')
+            return
+
+        logger.info(f"[{task_id}] Starting playlist download: {url[:50]}...")
+        ipc.send_progress(task_id, 0, status='preparing')
+
+        # First, get playlist info
+        playlist_info = await _get_playlist_info(task_id, url)
+
+        if not playlist_info:
+            error = get_error('UNKNOWN_ERROR')
+            ipc.send_error(task_id, error.user_message, error.code)
+            return
+
+        playlist_name = playlist_info.get('title', 'Playlist')
+        total_tracks = playlist_info.get('entry_count', 0)
+
+        logger.info(f"[{task_id}] Playlist: '{playlist_name}' ({total_tracks} tracks)")
+
+        # Create output folder
+        safe_folder_name = sanitize_folder_name(playlist_name)
+        output_dir = os.path.join(params.get('output_dir', config.DOWNLOAD_DIR), safe_folder_name)
+        safe_mkdir(output_dir)
+
+        logger.info(f"[{task_id}] Output directory: {output_dir}")
+
+        # Download all tracks
+        downloaded_files = await _download_playlist_tracks(
+            ipc, task_id, url, output_dir, params, total_tracks
+        )
+
+        if not downloaded_files:
+            ipc.send_error(task_id, "No tracks were downloaded")
+            return
+
+        logger.info(f"[{task_id}] Downloaded {len(downloaded_files)} tracks")
+        ipc.send_progress(task_id, 80, status='creating_archives')
+
+        # Create split archives
+        archive_max_size_mb = params.get('archive_max_size_mb', config.ARCHIVE_MAX_SIZE_MB)
+        archives = _create_split_archives(output_dir, safe_folder_name, archive_max_size_mb)
+
+        if not archives:
+            logger.warning(f"[{task_id}] Failed to create archives")
+            ipc.send_response(task_id, 'done', {
+                'playlist_name': playlist_name,
+                'total_tracks_downloaded': len(downloaded_files),
+                'archives': [],
+                'folder_path': output_dir,
+                'warning': 'Tracks downloaded but archiving failed'
+            })
+            return
+
+        logger.info(f"[{task_id}] Created {len(archives)} archive(s)")
+
+        ipc.send_progress(task_id, 100, status='completed')
+
+        ipc.send_response(task_id, 'done', {
+            'playlist_name': playlist_name,
+            'total_tracks_downloaded': len(downloaded_files),
+            'archives': archives,
+            'folder_path': output_dir,
+        })
+
+    except Exception as e:
+        error = categorize_error(e)
+        logger.error(f"[{task_id}] Playlist download failed: {error.user_message}", exc_info=True)
+        ipc.send_error(task_id, error.user_message, error.code)
+
+
+async def _get_playlist_info(task_id: str, url: str) -> Optional[Dict[str, Any]]:
+    """Get playlist metadata."""
+    try:
+        command = [
+            sys.executable, '-m', 'yt_dlp',
+            url,
+            '--dump-single-json',
+            '--flat-playlist',
+            '--no-cache-dir',
+        ]
+
+        command.extend(get_yt_dlp_cookie_args())
+
+        process = await asyncio.create_subprocess_exec(
+            *command,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+
+        stdout_bytes, stderr_bytes = await asyncio.wait_for(
+            process.communicate(),
+            timeout=config.YT_TIMEOUT
+        )
+        stdout = stdout_bytes.decode('utf-8', errors='replace')
+        stderr = stderr_bytes.decode('utf-8', errors='replace')
+
+        if process.returncode != 0:
+            logger.error(f"[{task_id}] Failed to get playlist info: {stderr[:200]}")
+            return None
+
+        data = json.loads(stdout)
+        return data
+
+    except Exception as e:
+        logger.error(f"[{task_id}] Get playlist info failed: {e}")
+        return None
+
+
+async def _download_playlist_tracks(ipc: IPCHandler, task_id: str, url: str, output_dir: str,
+                                   params: dict, total_tracks: int) -> List[str]:
+    """Download all tracks in playlist."""
+    try:
+        extract_audio = params.get('extract_audio', False)
+        audio_format = params.get('audio_format', 'mp3')
+
+        # Build yt-dlp command for playlist
+        command = [
+            sys.executable, '-m', 'yt_dlp',
+            url,
+            '--no-cache-dir',
+            '--progress-template', '[download] %(progress._percent_str)s at %(progress._speed_str)s',
+        ]
+
+        # Format
+        format_str = params.get('format', 'bestaudio[filesize<15M]/bestaudio')
+        command.extend(['-f', format_str])
+
+        # Audio extraction
+        if extract_audio:
+            command.extend(['-x', '--audio-format', audio_format, '--audio-quality', '192'])
+
+        # Output template
+        output_template = os.path.join(output_dir, '%(autonumber)03d - %(title)s.%(ext)s')
+        command.extend(['-o', output_template])
+
+        # Cookies
+        command.extend(get_yt_dlp_cookie_args())
+
+        logger.debug(f"[{task_id}] Playlist download command: {command[0]} ... (length: {len(command)})")
+
+        # Execute
+        process = await asyncio.create_subprocess_exec(
+            *command,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+
+        progress_collector = StreamProgressCollector()
+        track_number = 0
+
+        # Read progress
+        async def read_output():
+            nonlocal track_number
+
+            try:
+                while process.returncode is None:
+                    line_bytes = await asyncio.wait_for(
+                        process.stderr.readline(),
+                        timeout=config.YT_TIMEOUT
+                    )
+
+                    if not line_bytes:
+                        break
+
+                    line = line_bytes.decode('utf-8', errors='replace').strip()
+                    if 'Downloading' in line and 'of' in line:
+                        # Extract track progress
+                        match = re.search(r'(\d+)/(\d+)', line)
+                        if match:
+                            track_number = int(match.group(1))
+
+                    result = progress_collector.process_line(line)
+
+                    if result and 'progress' in result:
+                        # Calculate overall progress
+                        overall_percent = (track_number / max(total_tracks, 1)) * 100
+                        ipc.send_progress(
+                            task_id,
+                            int(overall_percent),
+                            status='downloading_playlist'
+                        )
+
+            except asyncio.TimeoutError:
+                logger.error(f"[{task_id}] Playlist download timeout")
+            except Exception as e:
+                logger.error(f"[{task_id}] Error reading output: {e}")
+
+        await read_output()
+        await process.wait()
+
+        # Find downloaded files
+        downloaded_files = []
+        if os.path.exists(output_dir):
+            for filename in os.listdir(output_dir):
+                if filename.endswith(('.mp3', '.m4a', '.mp4', '.webm')):
+                    filepath = os.path.join(output_dir, filename)
+                    if os.path.getsize(filepath) > 0:
+                        downloaded_files.append(filepath)
+
+        return sorted(downloaded_files)
+
+    except Exception as e:
+        logger.error(f"[{task_id}] Download playlist tracks failed: {e}")
+        return []
+
+
+def _create_split_archives(folder_path: str, playlist_name: str, max_part_size_mb: int = 100) -> List[Dict[str, Any]]:
+    """
+    Create split archives from downloaded files.
+
+    Args:
+        folder_path: Folder containing downloaded files
+        playlist_name: Playlist name for archive naming
+        max_part_size_mb: Maximum size per archive in MB
+
+    Returns:
+        List of archive info dicts
+    """
+    try:
+        max_part_size = max_part_size_mb * 1024 * 1024
+
+        # Get all media files
+        media_files = []
+        for filename in os.listdir(folder_path):
+            if filename.endswith(('.mp3', '.m4a', '.mp4', '.webm')):
+                filepath = os.path.join(folder_path, filename)
+                if os.path.getsize(filepath) > 0:
+                    media_files.append(filepath)
+
+        if not media_files:
+            logger.warning(f"No media files found in {folder_path}")
+            return []
+
+        media_files.sort()
+        logger.info(f"Creating archives for {len(media_files)} files")
+
+        # Create archives
+        archives = []
+        part_number = 1
+        current_part_size = 0
+        current_files = []
+
+        for filepath in media_files:
+            file_size = os.path.getsize(filepath)
+
+            # If this file would exceed limit, create archive
+            if current_part_size + file_size > max_part_size and current_files:
+                archive_info = _create_single_archive(
+                    folder_path, playlist_name, part_number, current_files
+                )
+                if archive_info:
+                    archives.append(archive_info)
+
+                part_number += 1
+                current_part_size = 0
+                current_files = []
+
+            current_files.append(filepath)
+            current_part_size += file_size
+
+        # Create final archive
+        if current_files:
+            archive_info = _create_single_archive(
+                folder_path, playlist_name, part_number, current_files
+            )
+            if archive_info:
+                archives.append(archive_info)
+
+        logger.info(f"Created {len(archives)} archive(s)")
+        return archives
+
+    except Exception as e:
+        logger.error(f"Create split archives failed: {e}")
+        return []
+
+
+def _create_single_archive(folder_path: str, playlist_name: str, part_number: int, files: List[str]) -> Optional[Dict[str, Any]]:
+    """Create single archive from files."""
+    try:
+        archive_name = f"Playlist - {playlist_name}-part{str(part_number).zfill(2)}.zip"
+        archive_path = os.path.join(folder_path, archive_name)
+
+        with zipfile.ZipFile(archive_path, 'w', zipfile.ZIP_DEFLATED, compresslevel=6) as zf:
+            for filepath in files:
+                arcname = os.path.basename(filepath)
+                zf.write(filepath, arcname=arcname)
+
+        archive_size = os.path.getsize(archive_path)
+        archive_size_mb = archive_size / (1024 * 1024)
+
+        logger.info(f"Created archive: {archive_name} ({archive_size_mb:.1f}MB)")
+
+        return {
+            'name': archive_name,
+            'size_mb': round(archive_size_mb, 2),
+            'path': archive_path,
+        }
+
+    except Exception as e:
+        logger.error(f"Create single archive failed: {e}")
+        return None

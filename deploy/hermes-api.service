@@ -1,0 +1,26 @@
+[Unit]
+Description=Hermes Download Nexus - REST API Server
+After=network.target
+
+[Service]
+Type=simple
+User=hermes
+Group=hermes
+WorkingDirectory=/opt/hermes
+EnvironmentFile=/opt/hermes/.env
+ExecStart=/opt/hermes/target/release/hermes-api
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=hermes-api
+
+# Security hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/hermes/downloads /opt/hermes/hermes.db /opt/hermes/hermes.db-wal /opt/hermes/hermes.db-shm
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

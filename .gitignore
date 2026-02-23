@@ -1,0 +1,50 @@
+# Build artifacts
+target/
+*.exe
+*.pdb
+
+# Database
+*.db
+*.db-wal
+*.db-shm
+*.db.bak
+
+# Environment
+.env
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+*.egg-info/
+
+# Node
+ui/node_modules/
+
+# Downloads & temp
+downloads/
+temp/
+*.tmp
+tmpclaude-*
+
+# Docs folder (keep README.md only)
+d-m/
+
+# OS files
+.DS_Store
+Thumbs.db
+nul
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Misc
+Hermes_Implementation_Plan.docx
+SETUP_NOTES.txt
+cookies.txt
+*.log
