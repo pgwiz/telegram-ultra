@@ -252,6 +252,64 @@ impl PythonDispatcher {
         *self.stdin_tx.lock().await = Some(stdin_tx);
         *self.running.lock().await = true;
 
+        // Spawn a background task to monitor the child process exit.
+        // This ensures we log the exit code if the worker dies unexpectedly.
+        let child_arc = self.child.clone();
+        let running_monitor = self.running.clone();
+        tokio::spawn(async move {
+            // Wait briefly to allow startup, then poll periodically
+            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+            loop {
+                tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                let mut guard = child_arc.lock().await;
+                if let Some(ref mut child) = *guard {
+                    match child.try_wait() {
+                        Ok(Some(status)) => {
+                            error!("Python worker exited unexpectedly with status: {}", status);
+                            *running_monitor.lock().await = false;
+                            *guard = None;
+                            break;
+                        }
+                        Ok(None) => {
+                            // Still running
+                        }
+                        Err(e) => {
+                            error!("Failed to poll worker process status: {}", e);
+                            break;
+                        }
+                    }
+                } else {
+                    // Child handle was taken (e.g., by stop()), exit monitor
+                    break;
+                }
+            }
+        });
+
+        // Brief startup health check: wait up to 3 seconds to confirm the worker
+        // hasn't crashed immediately during initialization.
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        {
+            let mut guard = self.child.lock().await;
+            if let Some(ref mut child) = *guard {
+                match child.try_wait() {
+                    Ok(Some(status)) => {
+                        error!("Python worker crashed during startup (exit status: {})", status);
+                        *self.running.lock().await = false;
+                        *guard = None;
+                        return Err(IpcError::SpawnFailed(
+                            format!("Worker exited immediately with status: {}", status),
+                        ).into());
+                    }
+                    Ok(None) => {
+                        // Still running after 500ms — good
+                    }
+                    Err(e) => {
+                        warn!("Could not check worker status: {}", e);
+                    }
+                }
+            }
+        }
+
         info!("Python dispatcher started successfully");
         Ok(())
     }
