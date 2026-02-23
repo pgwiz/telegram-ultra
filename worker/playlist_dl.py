@@ -72,7 +72,11 @@ async def handle_playlist_download(ipc: IPCHandler, task_id: str, request: dict)
         ipc.send_progress(task_id, 0, status='preparing')
 
         # First, get playlist info
-        playlist_info = await _get_playlist_info(task_id, url)
+        try:
+            playlist_info = await _get_playlist_info(task_id, url)
+        except RuntimeError as e:
+            ipc.send_error(task_id, str(e), 'PLAYLIST_ERROR')
+            return
 
         if not playlist_info:
             error = get_error('UNKNOWN_ERROR')
@@ -146,7 +150,17 @@ async def _get_playlist_info(task_id: str, url: str) -> Optional[Dict[str, Any]]
             '--no-cache-dir',
         ]
 
-        command.extend(get_yt_dlp_cookie_args())
+        cookie_args = get_yt_dlp_cookie_args()
+        command.extend(cookie_args)
+
+        # android client doesn't support cookies — use web-only when cookies are present
+        player_clients = 'web' if cookie_args else 'android,web'
+        command.extend(['--extractor-args', f'youtube:player_client={player_clients}'])
+
+        node_bin = find_node_binary()
+        if node_bin:
+            command.extend(['--js-runtimes', f'node:{node_bin}'])
+            command.extend(['--remote-components', 'ejs:github'])
 
         process = await asyncio.create_subprocess_exec(
             *command,
@@ -162,15 +176,24 @@ async def _get_playlist_info(task_id: str, url: str) -> Optional[Dict[str, Any]]
         stderr = stderr_bytes.decode('utf-8', errors='replace')
 
         if process.returncode != 0:
-            logger.error(f"[{task_id}] Failed to get playlist info: {stderr[:200]}")
-            return None
+            logger.error(f"[{task_id}] Failed to get playlist info: {stderr[:300]}")
+            # Extract the specific YouTube/yt-dlp error message for user display
+            for line in reversed(stderr.splitlines()):
+                line = line.strip()
+                if 'ERROR:' in line:
+                    msg = line.split('ERROR:', 1)[-1].strip()
+                    if msg:
+                        raise RuntimeError(msg)
+            raise RuntimeError("Failed to fetch playlist info")
 
         data = json.loads(stdout)
         return data
 
+    except RuntimeError:
+        raise
     except Exception as e:
         logger.error(f"[{task_id}] Get playlist info failed: {e}")
-        return None
+        raise RuntimeError(f"Failed to fetch playlist info: {e}")
 
 
 async def _download_playlist_tracks(ipc: IPCHandler, task_id: str, url: str, output_dir: str,
@@ -201,12 +224,18 @@ async def _download_playlist_tracks(ipc: IPCHandler, task_id: str, url: str, out
         command.extend(['-o', output_template])
 
         # Cookies
-        command.extend(get_yt_dlp_cookie_args())
+        cookie_args = get_yt_dlp_cookie_args()
+        command.extend(cookie_args)
+
+        # android client doesn't support cookies — use web-only when cookies are present
+        player_clients = 'web' if cookie_args else 'android,web'
+        command.extend(['--extractor-args', f'youtube:player_client={player_clients}'])
 
         # JS runtime for signature/n-challenge solving
         node_bin = find_node_binary()
         if node_bin:
             command.extend(['--js-runtimes', f'node:{node_bin}'])
+            command.extend(['--remote-components', 'ejs:github'])
 
         logger.debug(f"[{task_id}] Playlist download command: {command[0]} ... (length: {len(command)})")
 

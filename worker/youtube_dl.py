@@ -83,8 +83,8 @@ async def handle_youtube_download(ipc: IPCHandler, task_id: str, request: dict) 
             # with cascading fallback so something always works.
             format_str = params.get(
                 'format',
-                'bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]'
-                '/bestvideo[height<=720]+bestaudio'
+                'bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]'
+                '/bestvideo[height<=1080]+bestaudio'
                 '/bestvideo+bestaudio'
                 '/best'
             )
