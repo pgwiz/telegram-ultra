@@ -3,7 +3,7 @@
 /// Handles /start, /help, /download, /dv, /da, /search, /status, /cancel, /ping, /upcook.
 use std::sync::Arc;
 use teloxide::prelude::*;
-use teloxide::types::{CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, MessageId};
+use teloxide::types::{CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, MessageId, Recipient};
 use teloxide::utils::command::BotCommands;
 use tracing::{info, error, warn};
 use uuid::Uuid;
@@ -19,6 +19,7 @@ use crate::callback_state::{
     decode_callback, encode_callback, encode_cancel, parse_format_options,
 };
 use crate::link_detector;
+use crate::link_detector::DetectedLink;
 
 /// Build the per-user, per-task output directory path.
 /// Structure: <download_dir>/<chat_id>/<task_id>/
@@ -101,7 +102,7 @@ async fn cmd_start(bot: Bot, msg: Message) -> ResponseResult<()> {
     let text = "\
 Hermes Download Bot
 
-Send me a YouTube link and I'll download the audio for you.
+Send me a YouTube or Telegram link and I'll download it for you.
 
 Commands:
 /download <url> - Download audio (default)
@@ -113,10 +114,13 @@ Commands:
 /ping - Health check
 /help - Show this message
 
+Telegram: Paste t.me links to forward files from channels.
+Multiple links = batch forward.
+
 Admin:
 /upcook [cookies] - Update cookies.txt
 
-You can also just paste a YouTube link directly!";
+You can also just paste a link directly!";
     bot.send_message(msg.chat.id, text).await?;
     Ok(())
 }
@@ -135,17 +139,21 @@ async fn cmd_download(
 ) -> ResponseResult<()> {
     let url = url.trim().to_string();
     if url.is_empty() {
-        bot.send_message(msg.chat.id, "Usage: /download <youtube-url>").await?;
+        bot.send_message(msg.chat.id, "Usage: /download <url>").await?;
         return Ok(());
     }
 
     // Detect link type
     let link = match link_detector::detect_first_link(&url) {
+        Some(l) if l.is_telegram() => {
+            // Delegate Telegram links to the forward handler
+            return cmd_telegram_forward(bot, msg, vec![l], state).await;
+        }
         Some(l) if l.is_supported() => l,
         Some(_) => {
             bot.send_message(msg.chat.id,
                 "This link type is not supported yet.\n\
-                 Currently only YouTube links are supported.\n\
+                 Currently YouTube and Telegram links are supported.\n\
                  Other link support coming soon!"
             ).await?;
             return Ok(());
@@ -205,6 +213,126 @@ async fn cmd_download(
     Ok(())
 }
 
+/// Forward/copy messages from Telegram channels to the user.
+/// Handles both single links and batch (multiple links).
+async fn cmd_telegram_forward(
+    bot: Bot,
+    msg: Message,
+    links: Vec<DetectedLink>,
+    _state: Arc<AppState>,
+) -> ResponseResult<()> {
+    // Filter to only Telegram links
+    let tg_links: Vec<&DetectedLink> = links.iter()
+        .filter(|l| l.is_telegram())
+        .collect();
+
+    if tg_links.is_empty() {
+        bot.send_message(msg.chat.id, "No valid Telegram links found.").await?;
+        return Ok(());
+    }
+
+    let chat_id = msg.chat.id;
+    let total = tg_links.len();
+
+    if total == 1 {
+        // Single link - simple forward
+        let link = tg_links[0];
+        let status_msg = bot.send_message(chat_id, "Forwarding from channel...").await?;
+
+        match copy_telegram_message(&bot, chat_id, link).await {
+            Ok(_) => {
+                let _ = bot.delete_message(chat_id, status_msg.id).await;
+            }
+            Err(e) => {
+                let err_text = telegram_error_message(&e);
+                let _ = bot.edit_message_text(chat_id, status_msg.id, err_text).await;
+            }
+        }
+    } else {
+        // Batch - forward multiple
+        let status_msg = bot.send_message(chat_id, format!(
+            "Forwarding 0/{} files...", total
+        )).await?;
+        let status_id = status_msg.id;
+
+        let mut success = 0usize;
+        let mut failed = 0usize;
+        let mut last_edit = Instant::now();
+
+        for (i, link) in tg_links.iter().enumerate() {
+            match copy_telegram_message(&bot, chat_id, link).await {
+                Ok(_) => success += 1,
+                Err(e) => {
+                    failed += 1;
+                    warn!("Telegram forward failed for {}: {}", link.url(), e);
+                }
+            }
+
+            // Throttle progress edits (every 3 messages or every 3 seconds)
+            let done = i + 1;
+            if done == total || (done % 3 == 0 && last_edit.elapsed().as_secs() >= 2) {
+                let _ = bot.edit_message_text(chat_id, status_id, format!(
+                    "Forwarding {}/{}...", done, total
+                )).await;
+                last_edit = Instant::now();
+            }
+
+            // Small delay between copies to avoid rate limiting
+            if done < total {
+                tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+            }
+        }
+
+        // Final summary
+        let summary = if failed == 0 {
+            format!("Forwarded {} files", success)
+        } else {
+            format!("Forwarded {}/{} files ({} failed)", success, total, failed)
+        };
+        let _ = bot.edit_message_text(chat_id, status_id, summary).await;
+    }
+
+    Ok(())
+}
+
+/// Copy a single Telegram message from a channel to the user.
+async fn copy_telegram_message(
+    bot: &Bot,
+    chat_id: ChatId,
+    link: &DetectedLink,
+) -> Result<(), teloxide::RequestError> {
+    if let DetectedLink::TelegramFile { username, channel_id, message_id, .. } = link {
+        let from_chat: Recipient = if let Some(uname) = username {
+            Recipient::ChannelUsername(format!("@{}", uname))
+        } else if let Some(cid) = channel_id {
+            Recipient::Id(ChatId(*cid))
+        } else {
+            return Err(teloxide::RequestError::Api(
+                teloxide::ApiError::Unknown("Invalid channel reference".to_string())
+            ));
+        };
+
+        bot.copy_message(chat_id, from_chat, MessageId(*message_id)).await?;
+        Ok(())
+    } else {
+        Ok(())
+    }
+}
+
+/// Convert a Telegram API error to a user-friendly message.
+fn telegram_error_message(err: &teloxide::RequestError) -> String {
+    let err_str = err.to_string();
+    if err_str.contains("chat not found") {
+        "I don't have access to that channel.\nAdd me to the channel first, or make sure the link is correct.".to_string()
+    } else if err_str.contains("message to copy not found") || err_str.contains("message not found") {
+        "Message not found. It may have been deleted.".to_string()
+    } else if err_str.contains("bot was kicked") || err_str.contains("bot is not a member") {
+        "I'm not a member of that channel. Add me first.".to_string()
+    } else {
+        format!("Failed to forward: {}", err_str)
+    }
+}
+
 /// /dv or /da - Download with quality selection menu
 async fn cmd_download_with_quality(
     bot: Bot,
@@ -222,11 +350,15 @@ async fn cmd_download_with_quality(
 
     // Detect link type
     let link = match link_detector::detect_first_link(&url) {
-        Some(l) if l.is_supported() => l,
+        Some(l) if l.is_supported() && !l.is_telegram() => l,
+        Some(l) if l.is_telegram() => {
+            bot.send_message(msg.chat.id, "Quality selection is not available for Telegram links. Just paste the link directly.").await?;
+            return Ok(());
+        }
         Some(_) => {
             bot.send_message(msg.chat.id,
                 "This link type is not supported yet.\n\
-                 Currently only YouTube links are supported.\n\
+                 Currently YouTube and Telegram links are supported.\n\
                  Other link support coming soon!"
             ).await?;
             return Ok(());
@@ -920,15 +1052,22 @@ pub async fn handle_message(
             let _ = hermes_shared::db::upsert_user(pool, msg.chat.id.0, username).await;
         }
 
-        if let Some(link) = link_detector::detect_first_link(text) {
-            if link.is_supported() {
-                info!("Auto-detected link: {:?}", link);
-                cmd_download(bot, msg, link.url().to_string(), state).await?;
+        let links = link_detector::detect_links(text);
+        if !links.is_empty() {
+            let first = &links[0];
+            if first.is_telegram() {
+                // Telegram links: forward all detected links
+                info!("Auto-detected {} Telegram link(s)", links.len());
+                cmd_telegram_forward(bot, msg, links, state).await?;
+            } else if first.is_supported() {
+                // YouTube links: download first one
+                info!("Auto-detected link: {:?}", first);
+                cmd_download(bot, msg, first.url().to_string(), state).await?;
             } else {
-                info!("Unsupported link detected: {}", link.url());
+                info!("Unsupported link detected: {}", first.url());
                 bot.send_message(msg.chat.id,
                     "This link type is not supported yet.\n\
-                     Currently only YouTube links are supported.\n\
+                     Currently YouTube and Telegram links are supported.\n\
                      Other link support coming soon!"
                 ).await?;
             }

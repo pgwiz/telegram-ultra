@@ -15,7 +15,17 @@ pub enum DetectedLink {
     YoutubeShort { url: String, video_id: String },
     /// YouTube Music link.
     YoutubeMusic { url: String, video_id: String },
-    /// Unsupported URL (not YouTube).
+    /// Telegram channel/group file link.
+    TelegramFile {
+        url: String,
+        /// Channel username (for public links like t.me/channelname/123).
+        username: Option<String>,
+        /// Full chat ID (for private links like t.me/c/1234567890/123 → -1001234567890).
+        channel_id: Option<i64>,
+        /// Message ID within the channel.
+        message_id: i32,
+    },
+    /// Unsupported URL (not YouTube or Telegram).
     Unsupported { url: String },
 }
 
@@ -27,6 +37,7 @@ impl DetectedLink {
             DetectedLink::YoutubePlaylist { url, .. } => url,
             DetectedLink::YoutubeShort { url, .. } => url,
             DetectedLink::YoutubeMusic { url, .. } => url,
+            DetectedLink::TelegramFile { url, .. } => url,
             DetectedLink::Unsupported { url } => url,
         }
     }
@@ -41,6 +52,11 @@ impl DetectedLink {
         !matches!(self, DetectedLink::Unsupported { .. })
     }
 
+    /// Whether this is a Telegram link.
+    pub fn is_telegram(&self) -> bool {
+        matches!(self, DetectedLink::TelegramFile { .. })
+    }
+
     /// Get the IPC action name for this link type.
     pub fn ipc_action(&self) -> &str {
         match self {
@@ -48,6 +64,7 @@ impl DetectedLink {
             DetectedLink::YoutubeVideo { .. }
             | DetectedLink::YoutubeShort { .. }
             | DetectedLink::YoutubeMusic { .. } => "youtube_dl",
+            DetectedLink::TelegramFile { .. } => "telegram_forward",
             DetectedLink::Unsupported { .. } => "unsupported",
         }
     }
@@ -83,6 +100,20 @@ static YOUTUBE_MUSIC_RE: Lazy<Regex> = Lazy::new(|| {
 static GENERIC_URL_RE: Lazy<Regex> = Lazy::new(|| {
     Regex::new(
         r#"https?://[^\s<>\[\](){},"']+"#
+    ).unwrap()
+});
+
+/// Telegram private channel link: t.me/c/{channel_id}/{message_id}
+static TELEGRAM_PRIVATE_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(
+        r"https?://t\.me/c/(\d+)/(\d+)"
+    ).unwrap()
+});
+
+/// Telegram public channel link: t.me/{username}/{message_id} (optional /s/ prefix)
+static TELEGRAM_PUBLIC_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(
+        r"https?://t\.me/(?:s/)?([a-zA-Z_]\w{4,31})/(\d+)"
     ).unwrap()
 });
 
@@ -126,7 +157,43 @@ pub fn detect_links(text: &str) -> Vec<DetectedLink> {
         }
     }
 
-    // If no YouTube links found, check for any generic URL
+    // If no YouTube links found, check for Telegram links
+    if links.is_empty() {
+        // Private channel links first (more specific: t.me/c/{id}/{msg})
+        for cap in TELEGRAM_PRIVATE_RE.captures_iter(text) {
+            let raw_id = &cap[1];
+            let chat_id: i64 = format!("-100{}", raw_id).parse().unwrap_or(0);
+            let message_id: i32 = cap[2].parse().unwrap_or(0);
+            if chat_id != 0 && message_id > 0 {
+                links.push(DetectedLink::TelegramFile {
+                    url: cap[0].to_string(),
+                    username: None,
+                    channel_id: Some(chat_id),
+                    message_id,
+                });
+            }
+        }
+
+        // Public channel links (t.me/{username}/{msg})
+        for cap in TELEGRAM_PUBLIC_RE.captures_iter(text) {
+            let url = cap[0].to_string();
+            let username = cap[1].to_string();
+            let message_id: i32 = cap[2].parse().unwrap_or(0);
+
+            // Skip if already captured by private regex
+            let already = links.iter().any(|l| l.url() == url);
+            if !already && message_id > 0 {
+                links.push(DetectedLink::TelegramFile {
+                    url,
+                    username: Some(username),
+                    channel_id: None,
+                    message_id,
+                });
+            }
+        }
+    }
+
+    // If no YouTube or Telegram links found, check for any generic URL
     if links.is_empty() {
         if let Some(m) = GENERIC_URL_RE.find(text) {
             links.push(DetectedLink::Unsupported {
@@ -202,14 +269,58 @@ mod tests {
 
         let playlist = DetectedLink::YoutubePlaylist { url: "test".into(), playlist_id: "id".into() };
         assert_eq!(playlist.ipc_action(), "playlist");
+
+        let tg = DetectedLink::TelegramFile {
+            url: "test".into(), username: Some("ch".into()), channel_id: None, message_id: 1,
+        };
+        assert_eq!(tg.ipc_action(), "telegram_forward");
     }
 
     #[test]
-    fn test_telegram_link_unsupported() {
+    fn test_telegram_public_link() {
         let links = detect_links("Check this https://t.me/somechannel/123");
         assert_eq!(links.len(), 1);
-        assert!(matches!(&links[0], DetectedLink::Unsupported { .. }));
-        assert!(!links[0].is_supported());
+        assert!(links[0].is_supported());
+        assert!(links[0].is_telegram());
+        if let DetectedLink::TelegramFile { username, message_id, .. } = &links[0] {
+            assert_eq!(username.as_deref(), Some("somechannel"));
+            assert_eq!(*message_id, 123);
+        } else {
+            panic!("Expected TelegramFile");
+        }
+    }
+
+    #[test]
+    fn test_telegram_private_link() {
+        let links = detect_links("https://t.me/c/1234567890/456");
+        assert_eq!(links.len(), 1);
+        assert!(links[0].is_telegram());
+        if let DetectedLink::TelegramFile { channel_id, message_id, .. } = &links[0] {
+            assert_eq!(*channel_id, Some(-1001234567890));
+            assert_eq!(*message_id, 456);
+        } else {
+            panic!("Expected TelegramFile");
+        }
+    }
+
+    #[test]
+    fn test_telegram_s_prefix() {
+        let links = detect_links("https://t.me/s/mychannel/789");
+        assert_eq!(links.len(), 1);
+        assert!(links[0].is_telegram());
+        if let DetectedLink::TelegramFile { username, .. } = &links[0] {
+            assert_eq!(username.as_deref(), Some("mychannel"));
+        } else {
+            panic!("Expected TelegramFile");
+        }
+    }
+
+    #[test]
+    fn test_telegram_batch_links() {
+        let text = "Download these:\nhttps://t.me/somechannel/100\nhttps://t.me/somechannel/101\nhttps://t.me/somechannel/102";
+        let links = detect_links(text);
+        assert_eq!(links.len(), 3);
+        assert!(links.iter().all(|l| l.is_telegram()));
     }
 
     #[test]
