@@ -67,14 +67,9 @@ async def handle_youtube_download(ipc: IPCHandler, task_id: str, request: dict) 
             audio_format = params.get('audio_format', 'mp3')
             audio_quality = params.get('audio_quality', '192')
 
-            # Use the best available source (up to 1080p merged) so the extracted
-            # audio comes from the highest-quality stream, not a size-limited bestaudio.
-            command.extend(['-f',
-                'bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]'
-                '/bestvideo[height<=1080]+bestaudio'
-                '/bestvideo+bestaudio'
-                '/bestaudio'
-            ])
+            # bestaudio is YouTube's dedicated audio-only stream (opus/m4a, no size cap).
+            # No need to download video just to extract audio.
+            command.extend(['-f', 'bestaudio/best'])
 
             command.extend(['-x', '--audio-format', audio_format])
             if audio_quality:
