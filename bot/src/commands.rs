@@ -1,6 +1,6 @@
 /// Telegram bot command handlers.
 ///
-/// Handles /start, /help, /download, /dv, /da, /search, /status, /cancel, /ping.
+/// Handles /start, /help, /download, /dv, /da, /search, /status, /cancel, /ping, /upcook.
 use std::sync::Arc;
 use teloxide::prelude::*;
 use teloxide::types::{CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, MessageId};
@@ -53,6 +53,8 @@ pub enum Command {
     History,
     #[command(description = "Health check")]
     Ping,
+    #[command(description = "Update cookies (admin)")]
+    Upcook(String),
 }
 
 /// Shared application state passed to handlers.
@@ -62,6 +64,7 @@ pub struct AppState {
     pub download_dir: String,
     pub callback_store: CallbackStateStore,
     pub db_pool: Option<SqlitePool>,
+    pub admin_chat_id: Option<i64>,
 }
 
 /// Handle incoming commands.
@@ -82,6 +85,7 @@ pub async fn handle_command(
         Command::Cancel(task_id) => cmd_cancel(bot, msg, task_id, state).await,
         Command::History => cmd_history(bot, msg).await,
         Command::Ping => cmd_ping(bot, msg, state).await,
+        Command::Upcook(content) => cmd_upcook(bot, msg, content, state).await,
     }
 }
 
@@ -101,6 +105,9 @@ Commands:
 /cancel <id> - Cancel a download
 /ping - Health check
 /help - Show this message
+
+Admin:
+/upcook <cookies> - Update cookies.txt
 
 You can also just paste a YouTube link directly!";
     bot.send_message(msg.chat.id, text).await?;
@@ -822,6 +829,62 @@ async fn cmd_ping(
         }
         Err(e) => {
             bot.send_message(msg.chat.id, format!("Worker offline: {}", e)).await?;
+        }
+    }
+
+    Ok(())
+}
+
+/// /upcook <content> - Update cookies.txt (admin only)
+async fn cmd_upcook(
+    bot: Bot,
+    msg: Message,
+    content: String,
+    state: Arc<AppState>,
+) -> ResponseResult<()> {
+    // Admin-only check
+    let is_admin = state.admin_chat_id
+        .map(|id| id == msg.chat.id.0)
+        .unwrap_or(false);
+
+    if !is_admin {
+        bot.send_message(msg.chat.id, "This command is admin-only.").await?;
+        return Ok(());
+    }
+
+    let content = content.trim().to_string();
+    if content.is_empty() {
+        bot.send_message(msg.chat.id,
+            "Usage: /upcook <cookie content>\n\n\
+             Paste the full Netscape cookie file content after the command."
+        ).await?;
+        return Ok(());
+    }
+
+    let cookie_path = std::env::var("YOUTUBE_COOKIE_FILE")
+        .unwrap_or_else(|_| "./cookies.txt".to_string());
+
+    // Resolve relative to WORKER_DIR
+    let worker_dir = std::env::var("WORKER_DIR").unwrap_or_else(|_| ".".to_string());
+    let full_path = if std::path::Path::new(&cookie_path).is_relative() {
+        std::path::PathBuf::from(&worker_dir).join(&cookie_path)
+    } else {
+        std::path::PathBuf::from(&cookie_path)
+    };
+
+    match std::fs::write(&full_path, &content) {
+        Ok(_) => {
+            let size = content.len();
+            let lines = content.lines().count();
+            info!("Cookies updated by admin: {} ({} bytes, {} lines)", full_path.display(), size, lines);
+            bot.send_message(msg.chat.id, format!(
+                "Cookies updated!\nFile: {}\nSize: {} bytes ({} lines)",
+                full_path.display(), size, lines
+            )).await?;
+        }
+        Err(e) => {
+            error!("Failed to write cookies: {}", e);
+            bot.send_message(msg.chat.id, format!("Failed to write cookies: {}", e)).await?;
         }
     }
 

@@ -123,6 +123,10 @@ async fn main() {
     // Initialize callback state store
     let callback_store = CallbackStateStore::new();
 
+    // Parse admin chat ID
+    let admin_chat_id = std::env::var("ADMIN_CHAT_ID").ok()
+        .and_then(|s| s.parse::<i64>().ok());
+
     // Create shared application state
     let state = Arc::new(AppState {
         dispatcher,
@@ -130,6 +134,7 @@ async fn main() {
         download_dir: download_dir.clone(),
         callback_store: callback_store.clone(),
         db_pool: db_pool.clone(),
+        admin_chat_id,
     });
 
     // Build and start the Telegram bot
@@ -150,8 +155,6 @@ async fn main() {
     }
 
     // Notify admin that bot is online
-    let admin_chat_id = std::env::var("ADMIN_CHAT_ID").ok()
-        .and_then(|s| s.parse::<i64>().ok());
     if let Some(admin_id) = admin_chat_id {
         let db_status = if db_pool.is_some() { "connected" } else { "offline" };
         let msg = format!(
