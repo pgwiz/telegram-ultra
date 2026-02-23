@@ -126,7 +126,7 @@ build_rust() {
     cd "$HERMES_DIR"
     # Source cargo env in case it was just installed
     source "$HOME/.cargo/env" 2>/dev/null || true
-    cargo build --release 2>&1 | tail -5
+    cargo build --release 2>&1
     success "Rust build complete"
     ls -lh target/release/hermes-bot target/release/hermes-api 2>/dev/null
 }
