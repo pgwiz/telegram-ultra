@@ -54,3 +54,5 @@ fix_bot_detection.js
 fix_cookies.js
 fix_ejs.js
 fix_commands.js
+fix_tg_forward.js
+fix_tg_batch.js
