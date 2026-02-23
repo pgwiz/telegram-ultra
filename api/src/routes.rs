@@ -808,16 +808,30 @@ pub async fn admin_logs(
                             .unwrap_or("")
                             .to_string();
 
-                        let priority_num = entry.get("PRIORITY")
-                            .and_then(|v| v.as_str())
-                            .and_then(|s| s.parse::<u8>().ok())
-                            .unwrap_or(6);
-
-                        let level = match priority_num {
-                            0..=3 => "error",
-                            4 => "warn",
-                            5..=6 => "info",
-                            _ => "debug",
+                        // Parse log level from tracing output in message text.
+                        // Tracing format: "2026-02-23T11:59:08Z  INFO module: message"
+                        // Journald priority is the same for all entries from one process,
+                        // so we extract the level from the message content instead.
+                        let level = if message.contains("  ERROR ") || message.starts_with("ERROR ") {
+                            "error"
+                        } else if message.contains("  WARN ") || message.starts_with("WARN ") {
+                            "warn"
+                        } else if message.contains("  DEBUG ") || message.starts_with("DEBUG ") {
+                            "debug"
+                        } else if message.contains("  TRACE ") || message.starts_with("TRACE ") {
+                            "debug"
+                        } else {
+                            // Fall back to journald priority
+                            let priority_num = entry.get("PRIORITY")
+                                .and_then(|v| v.as_str())
+                                .and_then(|s| s.parse::<u8>().ok())
+                                .unwrap_or(6);
+                            match priority_num {
+                                0..=3 => "error",
+                                4 => "warn",
+                                5..=6 => "info",
+                                _ => "debug",
+                            }
                         };
 
                         logs.push(serde_json::json!({

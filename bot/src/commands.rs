@@ -74,6 +74,13 @@ pub async fn handle_command(
     cmd: Command,
     state: Arc<AppState>,
 ) -> ResponseResult<()> {
+    // Track user in DB (captures username from Telegram)
+    if let Some(pool) = &state.db_pool {
+        let username = msg.from()
+            .and_then(|u| u.username.as_deref());
+        let _ = hermes_shared::db::upsert_user(pool, msg.chat.id.0, username).await;
+    }
+
     match cmd {
         Command::Start => cmd_start(bot, msg).await,
         Command::Help => cmd_help(bot, msg).await,
@@ -906,6 +913,13 @@ pub async fn handle_message(
     state: Arc<AppState>,
 ) -> ResponseResult<()> {
     if let Some(text) = msg.text() {
+        // Track user in DB (captures username from Telegram)
+        if let Some(pool) = &state.db_pool {
+            let username = msg.from()
+                .and_then(|u| u.username.as_deref());
+            let _ = hermes_shared::db::upsert_user(pool, msg.chat.id.0, username).await;
+        }
+
         if let Some(link) = link_detector::detect_first_link(text) {
             if link.is_supported() {
                 info!("Auto-detected link: {:?}", link);
