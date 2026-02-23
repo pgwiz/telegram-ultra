@@ -213,13 +213,6 @@ async fn cmd_download(
     Ok(())
 }
 
-/// Result kind from forwarding a Telegram message.
-#[derive(Debug)]
-enum ForwardedKind {
-    Media,   // document, video, audio, photo, voice, animation, etc.
-    Text,    // text-only message or non-downloadable content
-}
-
 /// Forward/copy messages from Telegram channels to the user.
 /// Handles both single links and batch (multiple links).
 async fn cmd_telegram_forward(
@@ -247,13 +240,9 @@ async fn cmd_telegram_forward(
         let status_msg = bot.send_message(chat_id, "Forwarding from channel...").await?;
 
         match copy_telegram_message(&bot, chat_id, link).await {
-            Ok(ForwardedKind::Media) => {
+            Ok(()) => {
+                // Status message served its purpose — remove it
                 let _ = bot.delete_message(chat_id, status_msg.id).await;
-            }
-            Ok(ForwardedKind::Text) => {
-                let _ = bot.edit_message_text(chat_id, status_msg.id,
-                    "Forwarded (this message has no downloadable media file)."
-                ).await;
             }
             Err(e) => {
                 let err_text = telegram_error_message(&e);
@@ -267,15 +256,13 @@ async fn cmd_telegram_forward(
         )).await?;
         let status_id = status_msg.id;
 
-        let mut media_count = 0usize;
-        let mut text_count = 0usize;
+        let mut success_count = 0usize;
         let mut failed = 0usize;
         let mut last_edit = Instant::now();
 
         for (i, link) in tg_links.iter().enumerate() {
             match copy_telegram_message(&bot, chat_id, link).await {
-                Ok(ForwardedKind::Media) => media_count += 1,
-                Ok(ForwardedKind::Text) => text_count += 1,
+                Ok(()) => success_count += 1,
                 Err(e) => {
                     failed += 1;
                     warn!("Telegram forward failed for {}: {}", link.url(), e);
@@ -286,7 +273,7 @@ async fn cmd_telegram_forward(
             let done = i + 1;
             if done == total || (done % 3 == 0 && last_edit.elapsed().as_secs() >= 2) {
                 let _ = bot.edit_message_text(chat_id, status_id, format!(
-                    "Forwarding {}/{} ({} files, {} text)...", done, total, media_count, text_count
+                    "Forwarding {}/{}", done, total
                 )).await;
                 last_edit = Instant::now();
             }
@@ -301,13 +288,11 @@ async fn cmd_telegram_forward(
             }
         }
 
-        // Final summary by type
-        let success = media_count + text_count;
-        let summary = match (media_count, text_count, failed) {
-            (m, 0, 0) => format!("Forwarded {} file{}", m, if m == 1 { "" } else { "s" }),
-            (0, t, 0) => format!("Forwarded {} text message{} (no media files)", t, if t == 1 { "" } else { "s" }),
-            (m, t, 0) => format!("Forwarded {} file{} + {} text message{}", m, if m==1{""}else{"s"}, t, if t==1{""}else{"s"}),
-            (m, t, f) => format!("Forwarded {}/{}: {} file{}, {} text, {} failed", success, total, m, if m==1{""}else{"s"}, t, f),
+        // Final summary
+        let summary = if failed == 0 {
+            format!("Copied {} message{}", success_count, if success_count == 1 { "" } else { "s" })
+        } else {
+            format!("Copied {}/{} ({} failed)", success_count, total, failed)
         };
         let _ = bot.edit_message_text(chat_id, status_id, summary).await;
     }
@@ -315,18 +300,15 @@ async fn cmd_telegram_forward(
     Ok(())
 }
 
-/// Copy/forward a single Telegram message, detecting whether it contains media.
+/// Copy a single message from a Telegram channel to the user via copy_message.
 ///
-/// Strategy:
-/// 1. Use forward_message (returns full Message so we can inspect content type)
-/// 2. If the forwarded message has downloadable media: delete the "Forwarded from" version
-///    and re-send as a clean copy_message (no forward header)
-/// 3. If text-only: keep the forwarded message
+/// copy_message sends content without the "Forwarded from" header, regardless of
+/// whether the original is media or text — the user just receives the content cleanly.
 async fn copy_telegram_message(
     bot: &Bot,
     chat_id: ChatId,
     link: &DetectedLink,
-) -> Result<ForwardedKind, teloxide::RequestError> {
+) -> Result<(), teloxide::RequestError> {
     if let DetectedLink::TelegramFile { username, channel_id, message_id, .. } = link {
         let from_chat: Recipient = if let Some(uname) = username {
             Recipient::ChannelUsername(format!("@{}", uname))
@@ -338,28 +320,11 @@ async fn copy_telegram_message(
             ));
         };
 
-        // Forward first — this returns the full Message so we can check the content type
-        let fwd = bot.forward_message(chat_id, from_chat.clone(), MessageId(*message_id)).await?;
-
-        // Check whether it contains a downloadable media file
-        let is_media = fwd.document().is_some()
-            || fwd.video().is_some()
-            || fwd.audio().is_some()
-            || fwd.photo().is_some()
-            || fwd.voice().is_some()
-            || fwd.video_note().is_some()
-            || fwd.animation().is_some();
-
-        if is_media {
-            // Delete the "Forwarded from" header version and resend as a clean copy
-            let _ = bot.delete_message(chat_id, fwd.id).await;
-            bot.copy_message(chat_id, from_chat, MessageId(*message_id)).await?;
-        }
-        // Text messages: keep the forwarded version (user sees content with "Forwarded from")
-
-        Ok(if is_media { ForwardedKind::Media } else { ForwardedKind::Text })
+        // copy_message delivers the content without any "Forwarded from" header
+        bot.copy_message(chat_id, from_chat, MessageId(*message_id)).await?;
+        Ok(())
     } else {
-        Ok(ForwardedKind::Text)
+        Ok(())
     }
 }
 
