@@ -27,7 +27,8 @@ async fn main() {
         .with_env_filter(
             tracing_subscriber::EnvFilter::from_default_env()
                 .add_directive("hermes_bot=info".parse().unwrap())
-                .add_directive("hermes_shared=info".parse().unwrap()),
+                .add_directive("hermes_shared=info".parse().unwrap())
+                .add_directive("python_worker=warn".parse().unwrap()),
         )
         .init();
 
