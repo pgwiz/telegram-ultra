@@ -15,6 +15,7 @@
 #   hermes-pgwiz logs [svc]   Tail logs (bot|api|ui or all)
 #   hermes-pgwiz build        Build Rust crates (release)
 #   hermes-pgwiz setup-env    Create/edit .env interactively
+#   hermes-pgwiz auto-p       Auto-detect Python env vars
 ###############################################################################
 set -euo pipefail
 
@@ -355,6 +356,11 @@ do_install() {
         echo ""
     fi
 
+    # 12. Auto-detect Python paths in .env
+    if [[ -f "$HERMES_DIR/.env" ]]; then
+        auto_python_env
+    fi
+
     echo ""
     success "Installation complete!"
     echo ""
@@ -413,6 +419,9 @@ do_update() {
     # 6. Update Python venv + deps
     setup_python_venv
 
+    # 6b. Auto-detect and update Python env vars
+    auto_python_env
+
     # 7. Update Node deps
     setup_node_deps
 
@@ -429,6 +438,67 @@ do_update() {
     success "Update complete! Services restarted."
     info ".env was preserved — not modified by update."
     show_status
+}
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  AUTO-DETECT PYTHON ENVIRONMENT
+# ══════════════════════════════════════════════════════════════════════════════
+auto_python_env() {
+    local envfile="$HERMES_DIR/.env"
+
+    if [[ ! -f "$envfile" ]]; then
+        error "No .env file found. Run: hermes-pgwiz setup-env"
+        return 1
+    fi
+
+    info "Auto-detecting Python environment..."
+
+    # 1. Detect best Python binary
+    local py_bin=""
+    if [[ -x "$VENV_DIR/bin/python" ]]; then
+        py_bin="$VENV_DIR/bin/python"
+    elif [[ -x "$VENV_DIR/bin/python3" ]]; then
+        py_bin="$VENV_DIR/bin/python3"
+    elif command -v python3 &>/dev/null; then
+        py_bin="$(command -v python3)"
+    elif command -v python &>/dev/null; then
+        py_bin="$(command -v python)"
+    fi
+
+    if [[ -z "$py_bin" ]]; then
+        error "No Python installation found!"
+        return 1
+    fi
+
+    # 2. Detect worker dir (must contain worker/ package)
+    local w_dir="$HERMES_DIR"
+    if [[ ! -d "$w_dir/worker" ]]; then
+        warn "worker/ package not found in $w_dir"
+        w_dir="."
+    fi
+
+    # 3. Update .env — set or replace each key
+    set_env_var() {
+        local key="$1" val="$2" file="$3"
+        if grep -q "^${key}=" "$file" 2>/dev/null; then
+            sed -i "s|^${key}=.*|${key}=${val}|" "$file"
+        else
+            echo "${key}=${val}" >> "$file"
+        fi
+    }
+
+    set_env_var "PYTHON_BIN"  "$py_bin" "$envfile"
+    set_env_var "WORKER_DIR"  "$w_dir"  "$envfile"
+
+    # Verify python actually works
+    local py_ver
+    py_ver=$("$py_bin" --version 2>&1) || py_ver="unknown"
+
+    echo ""
+    success "Python environment configured:"
+    echo -e "  PYTHON_BIN  = ${CYAN}${py_bin}${NC}  (${py_ver})"
+    echo -e "  WORKER_DIR  = ${CYAN}${w_dir}${NC}"
+    echo ""
 }
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -511,6 +581,7 @@ main() {
         logs)          show_logs "${2:-all}" ;;
         build)         build_rust ;;
         setup-env)     need_root; setup_env ;;
+        auto-p)        need_root; auto_python_env ;;
         --menu|menu)   interactive_menu ;;
         --help|-h|help)
             echo "Usage: hermes-pgwiz [command]"
@@ -525,6 +596,7 @@ main() {
             echo "  logs [svc]   Tail logs (bot|api|ui|all)"
             echo "  build        Build Rust crates (release)"
             echo "  setup-env    Configure .env"
+            echo "  auto-p       Auto-detect Python env (PYTHON_BIN, WORKER_DIR)"
             echo "  --menu       Interactive menu (default)"
             echo ""
             ;;
