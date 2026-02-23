@@ -15,8 +15,10 @@ use sqlx::SqlitePool;
 
 use crate::workers::python_dispatcher::PythonDispatcher;
 use crate::callback_state::{
-    CallbackStateStore, DownloadMode, FormatOption, PendingSelection,
+    CallbackStateStore, SearchStateStore, SearchPending, SearchResultItem,
+    DownloadMode, FormatOption, PendingSelection,
     decode_callback, encode_callback, encode_cancel, parse_format_options,
+    encode_search_callback,
 };
 use crate::link_detector;
 use crate::link_detector::DetectedLink;
@@ -64,6 +66,7 @@ pub struct AppState {
     pub task_queue: TaskQueue,
     pub download_dir: String,
     pub callback_store: CallbackStateStore,
+    pub search_store: SearchStateStore,
     pub db_pool: Option<SqlitePool>,
     pub admin_chat_id: Option<i64>,
 }
@@ -539,6 +542,58 @@ pub async fn handle_callback_query(
         return Ok(());
     }
 
+    // Handle search result selection — starts audio download, search menu untouched
+    if mode_prefix == "sr" {
+        let pending = match state.search_store.peek(&key).await {
+            Some(p) => p,
+            None    => return Ok(()),
+        };
+        if index >= pending.results.len() { return Ok(()); }
+
+        let result  = &pending.results[index];
+        let url     = result.url.clone();
+        let chat_id = match q.message { Some(ref m) => m.chat.id, None => return Ok(()) };
+
+        let task_id  = Uuid::new_v4().to_string();
+        let short_id = task_id[..8].to_string();
+
+        state.task_queue.enqueue(&task_id, chat_id.0, "youtube_dl").await;
+
+        if let Some(pool) = &state.db_pool {
+            let _ = hermes_shared::db::create_task(
+                pool, &task_id, chat_id.0, "youtube_dl", &url, Some("audio"),
+            ).await;
+        }
+
+        // New status message — search results message is NOT edited
+        let status_msg = match bot.send_message(chat_id,
+            format!("Queued [{}]\n{}", short_id, url)
+        ).await {
+            Ok(m) => m,
+            Err(_) => return Ok(()),
+        };
+        let status_msg_id = status_msg.id;
+
+        let out_dir = task_output_dir(&state.download_dir, chat_id.0, &task_id);
+        let request = download_request(&task_id, &url, true, &out_dir);
+
+        let state2 = state.clone();
+        tokio::spawn(async move {
+            let _ = execute_download_and_send(
+                &bot,
+                chat_id,
+                status_msg_id,
+                &short_id,
+                "audio",
+                &task_id,
+                &request,
+                DownloadMode::Audio,
+                &state2,
+            ).await;
+        });
+        return Ok(());
+    }
+
     // Parse mode
     let mode = match DownloadMode::from_prefix(&mode_prefix) {
         Some(m) => m,
@@ -810,7 +865,7 @@ async fn cmd_search(
     }
 
     let task_id = Uuid::new_v4().to_string();
-    let request = search_request(&task_id, &query, 5);
+    let request = search_request(&task_id, &query, 10);
 
     let searching_msg = bot.send_message(msg.chat.id, format!(
         "Searching: \"{}\"...", query
@@ -834,28 +889,45 @@ async fn cmd_search(
                         format!("No results found for \"{}\".", query)
                     ).await?;
                 } else {
-                    let mut text = format!("Results for \"{}\":\n\n", query);
-                    for (i, result) in results.iter().enumerate() {
-                        let title = result.get("title").and_then(|v| v.as_str()).unwrap_or("?");
-                        let artist = result.get("artist").and_then(|v| v.as_str()).unwrap_or("");
-                        let url = result.get("url").and_then(|v| v.as_str()).unwrap_or("");
-                        if artist.is_empty() {
-                            text.push_str(&format!("{}. {}\n{}\n\n", i + 1, title, url));
-                        } else {
-                            text.push_str(&format!("{}. {} - {}\n{}\n\n", i + 1, artist, title, url));
-                        }
-                    }
+                    // Build (url, title) pairs
+                    let items: Vec<(String, String)> = results.iter().map(|r| {
+                        let url   = r.get("url").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                        let title = r.get("title").and_then(|v| v.as_str()).unwrap_or("?").to_string();
+                        (url, title)
+                    }).collect();
+
+                    // Store for callback retrieval (peek — buttons stay active)
+                    let key: String = task_id[..6].to_string();
+                    state.search_store.store(key.clone(), SearchPending {
+                        results: items.iter().map(|(url, title)| SearchResultItem {
+                            url:   url.clone(),
+                            title: title.clone(),
+                        }).collect(),
+                        created_at: std::time::Instant::now(),
+                    }).await;
+
+                    // One button per result, truncated to 52 chars
+                    let buttons: Vec<Vec<InlineKeyboardButton>> = items.iter()
+                        .enumerate()
+                        .map(|(i, (_, title))| {
+                            let label: String = if title.chars().count() > 52 {
+                                format!("{}…", title.chars().take(51).collect::<String>())
+                            } else {
+                                title.clone()
+                            };
+                            vec![InlineKeyboardButton::callback(label, encode_search_callback(&key, i))]
+                        })
+                        .collect();
 
                     let from_cache = response.data.get("from_cache")
                         .and_then(|v| v.as_bool())
                         .unwrap_or(false);
-                    if from_cache {
-                        text.push_str("(cached)\n");
-                    }
+                    let cache_note = if from_cache { " · cached" } else { "" };
+                    let text = format!("Search: \"{}\"{}  —  tap to download:", query, cache_note);
 
-                    text.push_str("Send a link to download!");
-
-                    bot.edit_message_text(msg.chat.id, searching_msg.id, text).await?;
+                    bot.edit_message_text(msg.chat.id, searching_msg.id, text)
+                        .reply_markup(InlineKeyboardMarkup::new(buttons))
+                        .await?;
                 }
             }
         }

@@ -139,3 +139,50 @@ pub fn parse_format_options(formats: &[serde_json::Value]) -> Vec<FormatOption> 
         })
         .collect()
 }
+
+/// A single search result item for inline keyboard selection.
+#[derive(Debug, Clone)]
+pub struct SearchResultItem {
+    pub url:   String,
+    pub title: String,
+}
+
+/// Pending search results waiting for user button-tap.
+#[derive(Debug, Clone)]
+pub struct SearchPending {
+    pub results:    Vec<SearchResultItem>,
+    pub created_at: std::time::Instant,
+}
+
+/// Thread-safe store for pending search result keyboards.
+/// Uses peek (not take) so every button in the menu stays clickable.
+#[derive(Clone)]
+pub struct SearchStateStore {
+    inner: Arc<Mutex<HashMap<String, SearchPending>>>,
+}
+
+impl SearchStateStore {
+    pub fn new() -> Self {
+        Self { inner: Arc::new(Mutex::new(HashMap::new())) }
+    }
+
+    pub async fn store(&self, key: String, pending: SearchPending) {
+        self.inner.lock().await.insert(key, pending);
+    }
+
+    /// Return a clone without removing — all buttons stay active.
+    pub async fn peek(&self, key: &str) -> Option<SearchPending> {
+        self.inner.lock().await.get(key).cloned()
+    }
+
+    pub async fn cleanup_expired(&self, ttl_secs: u64) {
+        let now = std::time::Instant::now();
+        let mut map = self.inner.lock().await;
+        map.retain(|_, v| now.duration_since(v.created_at).as_secs() < ttl_secs);
+    }
+}
+
+/// Encode search-result callback data.  Format: "sr:prefix:index"
+pub fn encode_search_callback(prefix: &str, index: usize) -> String {
+    format!("sr:{}:{}", prefix, index)
+}
