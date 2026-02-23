@@ -18,7 +18,7 @@ use crate::callback_state::{
     CallbackStateStore, SearchStateStore, SearchPending, SearchResultItem,
     DownloadMode, FormatOption, PendingSelection,
     decode_callback, encode_callback, encode_cancel, parse_format_options,
-    encode_search_callback,
+    encode_search_callback, encode_search_format_callback,
 };
 use crate::link_detector;
 use crate::link_detector::DetectedLink;
@@ -520,6 +520,63 @@ pub async fn handle_callback_query(
         None => return Ok(()),
     };
 
+    // Handle search format selection (4-part: sf:key:index:a/v) — must run before decode_callback
+    if data.starts_with("sf:") {
+        let _ = bot.answer_callback_query(&q.id).await;
+        let parts: Vec<&str> = data.splitn(4, ':').collect();
+        let sf_key   = parts.get(1).copied().unwrap_or("");
+        let sf_idx: usize = parts.get(2).and_then(|s| s.parse().ok()).unwrap_or(usize::MAX);
+        let is_audio = parts.get(3).copied().unwrap_or("a") == "a";
+
+        let pending = match state.search_store.peek(sf_key).await {
+            Some(p) => p,
+            None    => return Ok(()),
+        };
+        if sf_idx >= pending.results.len() { return Ok(()); }
+
+        let result   = &pending.results[sf_idx];
+        let url      = result.url.clone();
+        let chat_id  = match q.message { Some(ref m) => m.chat.id, None => return Ok(()) };
+        let msg_id   = match q.message { Some(ref m) => m.id,      None => return Ok(()) };
+
+        let task_id  = Uuid::new_v4().to_string();
+        let short_id = task_id[..8].to_string();
+        let mode_label = if is_audio { "audio" } else { "video" };
+
+        state.task_queue.enqueue(&task_id, chat_id.0, "youtube_dl").await;
+
+        if let Some(pool) = &state.db_pool {
+            let _ = hermes_shared::db::create_task(
+                pool, &task_id, chat_id.0, "youtube_dl", &url, Some(mode_label),
+            ).await;
+        }
+
+        // Edit the format-choice message to show download status
+        let _ = bot.edit_message_text(chat_id, msg_id,
+            format!("Queued [{}] ({}) — {}", short_id, mode_label, url)
+        ).reply_markup(InlineKeyboardMarkup::new(vec![])).await;
+
+        let out_dir  = task_output_dir(&state.download_dir, chat_id.0, &task_id);
+        let dl_mode  = if is_audio { DownloadMode::Audio } else { DownloadMode::Video };
+        let request  = download_request(&task_id, &url, is_audio, &out_dir);
+
+        let state2 = state.clone();
+        tokio::spawn(async move {
+            let _ = execute_download_and_send(
+                &bot,
+                chat_id,
+                msg_id,
+                &short_id,
+                mode_label,
+                &task_id,
+                &request,
+                dl_mode,
+                &state2,
+            ).await;
+        });
+        return Ok(());
+    }
+
     let (mode_prefix, key, index) = match decode_callback(&data) {
         Some(decoded) => decoded,
         None => {
@@ -542,7 +599,7 @@ pub async fn handle_callback_query(
         return Ok(());
     }
 
-    // Handle search result selection — starts audio download, search menu untouched
+    // Handle search result selection — show audio/video format choice
     if mode_prefix == "sr" {
         let pending = match state.search_store.peek(&key).await {
             Some(p) => p,
@@ -550,47 +607,23 @@ pub async fn handle_callback_query(
         };
         if index >= pending.results.len() { return Ok(()); }
 
-        let result  = &pending.results[index];
-        let url     = result.url.clone();
+        let result = &pending.results[index];
+        let title  = if result.title.chars().count() > 50 {
+            format!("{}…", result.title.chars().take(49).collect::<String>())
+        } else {
+            result.title.clone()
+        };
         let chat_id = match q.message { Some(ref m) => m.chat.id, None => return Ok(()) };
 
-        let task_id  = Uuid::new_v4().to_string();
-        let short_id = task_id[..8].to_string();
+        // Send a new message with Audio / Video choice (search results message stays untouched)
+        let buttons = vec![vec![
+            InlineKeyboardButton::callback("🎵 Audio (MP3)", encode_search_format_callback(&key, index, true)),
+            InlineKeyboardButton::callback("🎬 Video (MP4)", encode_search_format_callback(&key, index, false)),
+        ]];
+        let _ = bot.send_message(chat_id, format!("Choose format:\n{}", title))
+            .reply_markup(InlineKeyboardMarkup::new(buttons))
+            .await;
 
-        state.task_queue.enqueue(&task_id, chat_id.0, "youtube_dl").await;
-
-        if let Some(pool) = &state.db_pool {
-            let _ = hermes_shared::db::create_task(
-                pool, &task_id, chat_id.0, "youtube_dl", &url, Some("audio"),
-            ).await;
-        }
-
-        // New status message — search results message is NOT edited
-        let status_msg = match bot.send_message(chat_id,
-            format!("Queued [{}]\n{}", short_id, url)
-        ).await {
-            Ok(m) => m,
-            Err(_) => return Ok(()),
-        };
-        let status_msg_id = status_msg.id;
-
-        let out_dir = task_output_dir(&state.download_dir, chat_id.0, &task_id);
-        let request = download_request(&task_id, &url, true, &out_dir);
-
-        let state2 = state.clone();
-        tokio::spawn(async move {
-            let _ = execute_download_and_send(
-                &bot,
-                chat_id,
-                status_msg_id,
-                &short_id,
-                "audio",
-                &task_id,
-                &request,
-                DownloadMode::Audio,
-                &state2,
-            ).await;
-        });
         return Ok(());
     }
 

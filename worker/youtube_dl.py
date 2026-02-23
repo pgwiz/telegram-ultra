@@ -68,7 +68,8 @@ async def handle_youtube_download(ipc: IPCHandler, task_id: str, request: dict) 
             audio_quality = params.get('audio_quality', '0')
 
             # Prefer m4a audio stream; --audio-quality 0 = best VBR quality for ffmpeg.
-            command.extend(['-f', 'bestaudio[ext=m4a]/bestaudio'])
+            # Fall back to best (any format) if no dedicated audio stream is available.
+            command.extend(['-f', 'bestaudio[ext=m4a]/bestaudio/best'])
 
             command.extend(['-x', '--audio-format', audio_format])
             if audio_quality:

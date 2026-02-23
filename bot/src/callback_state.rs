@@ -186,3 +186,8 @@ impl SearchStateStore {
 pub fn encode_search_callback(prefix: &str, index: usize) -> String {
     format!("sr:{}:{}", prefix, index)
 }
+
+/// Encode search-format callback data.  Format: "sf:prefix:index:a" (audio) or ":v" (video)
+pub fn encode_search_format_callback(prefix: &str, index: usize, is_audio: bool) -> String {
+    format!("sf:{}:{}:{}", prefix, index, if is_audio { "a" } else { "v" })
+}
