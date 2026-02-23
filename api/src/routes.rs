@@ -804,23 +804,46 @@ pub async fn admin_logs(
                             .unwrap_or("unknown")
                             .to_string();
 
-                        let message = entry.get("MESSAGE")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("")
-                            .to_string();
+                        // journalctl --output=json returns MESSAGE as a string normally,
+                        // but encodes it as a u8 byte array when the message contains
+                        // non-ASCII characters (emoji, escape codes, etc).
+                        let message = {
+                            let msg_val = entry.get("MESSAGE");
+                            if let Some(s) = msg_val.and_then(|v| v.as_str()) {
+                                s.to_string()
+                            } else if let Some(arr) = msg_val.and_then(|v| v.as_array()) {
+                                let bytes: Vec<u8> = arr.iter()
+                                    .filter_map(|b| b.as_u64().map(|n| n as u8))
+                                    .collect();
+                                String::from_utf8_lossy(&bytes).into_owned()
+                            } else {
+                                String::new()
+                            }
+                        };
 
-                        // Parse log level from tracing output in message text.
-                        // Tracing format: "2026-02-23T11:59:08Z  INFO module: message"
+                        // Parse log level from message text.
+                        // Rust tracing:   "2026-02-23T11:59:08Z  INFO module: msg"
+                        // Python logging: "2026-02-23 11:59:08,123 - name - INFO - msg"
                         // Journald priority is the same for all entries from one process,
-                        // so we extract the level from the message content instead.
-                        let level = if message.contains("  ERROR ") || message.starts_with("ERROR ") {
+                        // so we extract level from message content instead.
+                        let level = if message.contains("  ERROR ") || message.starts_with("ERROR ")
+                            || message.contains(" - ERROR - ")
+                        {
                             "error"
-                        } else if message.contains("  WARN ") || message.starts_with("WARN ") {
+                        } else if message.contains("  WARN ") || message.starts_with("WARN ")
+                            || message.contains(" - WARNING - ")
+                        {
                             "warn"
-                        } else if message.contains("  DEBUG ") || message.starts_with("DEBUG ") {
+                        } else if message.contains("  DEBUG ") || message.starts_with("DEBUG ")
+                            || message.contains(" - DEBUG - ")
+                        {
                             "debug"
                         } else if message.contains("  TRACE ") || message.starts_with("TRACE ") {
                             "debug"
+                        } else if message.contains("  INFO ") || message.starts_with("INFO ")
+                            || message.contains(" - INFO - ")
+                        {
+                            "info"
                         } else {
                             // Fall back to journald priority
                             let priority_num = entry.get("PRIORITY")

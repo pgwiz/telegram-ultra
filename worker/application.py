@@ -97,11 +97,8 @@ async def main():
         cache_stats = await CacheManager.get_stats()
         logger.info(f"📊 Cache initialized: {cache_stats}")
 
-        # Validate cookies
-        if cookie_manager.get_cookie_file():
-            logger.info("🍪 Cookies file available")
-        else:
-            logger.warning("⚠️ No cookies file found, will use browser extraction or unauthenticated mode")
+        # Verify cookies on startup
+        cookie_manager.verify_on_startup()
 
         # Setup handlers
         setup_handlers()

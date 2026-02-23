@@ -5,10 +5,13 @@ Handles Netscape format cookies and browser extraction
 
 import os
 import tempfile
+import logging
 from typing import Optional
 from datetime import datetime
 from worker.config import config
-from worker.utils import safe_output_path
+
+
+logger = logging.getLogger(__name__)
 
 
 class CookieManager:
@@ -21,64 +24,49 @@ class CookieManager:
 
     def get_cookie_file(self) -> Optional[str]:
         """
-        Get or create reusable cookie file.
+        Get cookie file path for yt-dlp.
+
+        Uses the uploaded cookie file directly (not a temp copy) so that
+        updates via /upcook take effect immediately.
+
+        Falls back to YTDLP_COOKIES env var (writes content to temp file).
 
         Returns cookie file path or None if unavailable.
         """
-        # Return cached path if already loaded
-        if self.loaded and self.cookie_path and os.path.exists(self.cookie_path):
-            return self.cookie_path
-
-        cookie_data = None
-
-        # Try loading from configured path
-        if os.path.exists(config.COOKIES_FILE):
-            try:
-                with open(config.COOKIES_FILE, 'r', encoding='utf-8') as f:
-                    cookie_data = f.read()
-            except Exception as e:
-                print(f"⚠️ Failed to read cookie file {config.COOKIES_FILE}: {e}")
-                return None
-
-        # If not found, try environment variable
-        if not cookie_data:
-            cookie_data = os.environ.get('YTDLP_COOKIES')
-
-        if not cookie_data:
-            return None
-
-        # Write to temp directory with reusable name
-        try:
-            temp_dir = tempfile.gettempdir()
-            cookie_path = os.path.join(temp_dir, 'yt_cookies_reusable.txt')
-
-            # Only write if doesn't exist to reuse
-            if not os.path.exists(cookie_path):
-                with open(cookie_path, 'w', encoding='utf-8') as f:
-                    f.write(cookie_data)
-
-            # Set file permissions to 0o600 (read/write for owner only)
-            try:
-                os.chmod(cookie_path, 0o600)
-            except Exception:
-                pass  # Windows may not support chmod
-
+        # Use the configured cookie file directly — no temp copy
+        cookie_path = os.path.abspath(config.COOKIES_FILE)
+        if os.path.exists(cookie_path):
             self.cookie_path = cookie_path
             self.loaded = True
             self.last_validated = datetime.now()
-
-            print(f"🍪 Cookie file loaded: {cookie_path}")
             return cookie_path
 
-        except Exception as e:
-            print(f"❌ Failed to setup cookie file: {e}")
-            return None
+        # Fallback: YTDLP_COOKIES env var contains inline cookie content
+        cookie_data = os.environ.get('YTDLP_COOKIES')
+        if cookie_data:
+            try:
+                temp_dir = tempfile.gettempdir()
+                fallback_path = os.path.join(temp_dir, 'yt_cookies_reusable.txt')
+                with open(fallback_path, 'w', encoding='utf-8') as f:
+                    f.write(cookie_data)
+                try:
+                    os.chmod(fallback_path, 0o600)
+                except Exception:
+                    pass  # Windows may not support chmod
+                self.cookie_path = fallback_path
+                self.loaded = True
+                self.last_validated = datetime.now()
+                logger.info(f"Cookie file from YTDLP_COOKIES env: {fallback_path}")
+                return fallback_path
+            except Exception as e:
+                logger.error(f"Failed to write cookie file from env: {e}")
+                return None
 
         return None
 
     def validate_cookie_file(self) -> bool:
         """
-        Validate cookie file exists and is readable.
+        Validate cookie file exists, is readable, and looks like cookies.
 
         Returns:
             True if valid
@@ -91,28 +79,48 @@ class CookieManager:
         try:
             with open(cookie_file, 'r', encoding='utf-8') as f:
                 content = f.read()
-                # Basic validation: should contain cookie lines
-                return len(content) > 0 and ('\.youtube\.com' in content or 'youtube.com' in content or content.strip())
-
+                if not content.strip():
+                    return False
+                return 'youtube.com' in content or '.google.com' in content
         except Exception as e:
-            print(f"⚠️ Cookie validation failed: {e}")
+            logger.warning(f"Cookie validation failed: {e}")
             return False
+
+    def verify_on_startup(self):
+        """
+        Verify cookies on startup with detailed logging.
+        Call this from the worker entry point.
+        """
+        cookie_file = self.get_cookie_file()
+        if not cookie_file:
+            logger.warning("No cookie file found. Downloads may fail for restricted content.")
+            logger.warning(f"  Checked: {os.path.abspath(config.COOKIES_FILE)}")
+            logger.warning("  Upload cookies via /upcook command or set YTDLP_COOKIES env var")
+            return
+
+        try:
+            size = os.path.getsize(cookie_file)
+            with open(cookie_file, 'r', encoding='utf-8') as f:
+                lines = sum(1 for _ in f)
+            has_youtube = self.validate_cookie_file()
+            logger.info(f"Cookie file verified: {cookie_file}")
+            logger.info(f"  Size: {size} bytes, {lines} lines")
+            if has_youtube:
+                logger.info("  Contains YouTube/Google cookies")
+            else:
+                logger.warning("  No YouTube/Google domains found in cookie file")
+        except Exception as e:
+            logger.error(f"Cookie verification error: {e}")
 
     def build_yt_dlp_args(self) -> list:
         """
         Build yt-dlp command arguments for cookie handling.
 
-        Only uses Netscape-format cookie files. Returns empty list
-        if no cookie file is available (runs unauthenticated).
-
-        Returns:
-            List of arguments to append to yt-dlp command
+        Returns empty list if no cookie file is available.
         """
         cookie_file = self.get_cookie_file()
         if cookie_file:
             return ['--cookies', cookie_file]
-
-        # No cookies available - run unauthenticated
         return []
 
     def suggest_cookie_refresh(self) -> bool:
@@ -126,12 +134,10 @@ class CookieManager:
             return True
 
         age_hours = (datetime.now() - self.last_validated).total_seconds() / 3600
-
-        # Suggest refresh after 30 days
         return age_hours > (30 * 24)
 
     def clear_cache(self):
-        """Clear cached cookie path."""
+        """Clear cached cookie path so next call re-checks the file."""
         self.cookie_path = None
         self.loaded = False
         self.last_validated = None
@@ -142,40 +148,20 @@ cookie_manager = CookieManager()
 
 
 def get_cookies_file() -> Optional[str]:
-    """
-    Convenience function to get cookies file.
-
-    Returns:
-        Cookie file path or None
-    """
+    """Convenience function to get cookies file path."""
     return cookie_manager.get_cookie_file()
 
 
 def get_yt_dlp_cookie_args() -> list:
-    """
-    Convenience function to get yt-dlp cookie arguments.
-
-    Returns:
-        List of arguments for yt-dlp command
-    """
+    """Convenience function to get yt-dlp cookie arguments."""
     return cookie_manager.build_yt_dlp_args()
 
 
 def validate_cookies() -> bool:
-    """
-    Convenience function to validate cookies.
-
-    Returns:
-        True if cookies are valid
-    """
+    """Convenience function to validate cookies."""
     return cookie_manager.validate_cookie_file()
 
 
 def should_refresh_cookies() -> bool:
-    """
-    Convenience function to check if cookies need refresh.
-
-    Returns:
-        True if refresh recommended
-    """
+    """Convenience function to check if cookies need refresh."""
     return cookie_manager.suggest_cookie_refresh()
