@@ -19,7 +19,7 @@ SyslogIdentifier=hermes-api
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true
-ReadWritePaths=/opt/hermes/downloads /opt/hermes/hermes.db /opt/hermes/hermes.db-wal /opt/hermes/hermes.db-shm
+ReadWritePaths=/opt/hermes
 PrivateTmp=true
 
 [Install]
