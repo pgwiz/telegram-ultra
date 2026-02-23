@@ -50,3 +50,6 @@ cookies.txt
 *.log
 fix_routes.js
 fix_ytdl.js
+fix_bot_detection.js
+fix_cookies.js
+fix_ejs.js
