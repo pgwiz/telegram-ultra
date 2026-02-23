@@ -23,6 +23,26 @@ from worker.progress_hooks import StreamProgressCollector
 logger = logging.getLogger(__name__)
 
 
+def normalize_playlist_url(url: str) -> str:
+    """
+    Normalize YouTube playlist URLs for yt-dlp compatibility.
+
+    Radio Mix URLs (list=RD...) expire when used as a plain playlist URL.
+    They must include the seed video + start_radio=1 to work reliably.
+    """
+    radio_match = re.search(r'list=(RD([a-zA-Z0-9_-]+))', url)
+    if radio_match:
+        full_list_id = radio_match.group(1)   # e.g. RDEgBJmlPo8Xw
+        video_id     = radio_match.group(2)   # e.g. EgBJmlPo8Xw
+        if 'start_radio=1' in url and f'v={video_id}' in url:
+            return url
+        return (
+            f"https://www.youtube.com/watch?v={video_id}"
+            f"&list={full_list_id}&start_radio=1"
+        )
+    return url
+
+
 async def handle_playlist_download(ipc: IPCHandler, task_id: str, request: dict) -> None:
     """
     Download YouTube playlist.
@@ -67,6 +87,9 @@ async def handle_playlist_download(ipc: IPCHandler, task_id: str, request: dict)
         if not url:
             ipc.send_error(task_id, "Missing 'url' parameter", 'INVALID_URL')
             return
+
+        # Normalize Radio Mix URLs (list=RD...) before passing to yt-dlp
+        url = normalize_playlist_url(url)
 
         logger.info(f"[{task_id}] Starting playlist download: {url[:50]}...")
         ipc.send_progress(task_id, 0, status='preparing')
@@ -208,16 +231,23 @@ async def _download_playlist_tracks(ipc: IPCHandler, task_id: str, url: str, out
             sys.executable, '-m', 'yt_dlp',
             url,
             '--no-cache-dir',
+            '--ignore-errors',
+            '--socket-timeout', '10',
             '--progress-template', '[download] %(progress._percent_str)s at %(progress._speed_str)s',
         ]
 
+        # Limit tracks for Radio Mixes (infinite) and large playlists
+        playlist_end = params.get('playlist_end', 50)
+        if playlist_end:
+            command.extend(['--playlist-end', str(playlist_end)])
+
         # Format
-        format_str = params.get('format', 'bestaudio[filesize<15M]/bestaudio')
+        format_str = params.get('format', 'bestaudio[ext=m4a]/bestaudio')
         command.extend(['-f', format_str])
 
         # Audio extraction
         if extract_audio:
-            command.extend(['-x', '--audio-format', audio_format, '--audio-quality', '192'])
+            command.extend(['-x', '--audio-format', audio_format, '--audio-quality', '0'])
 
         # Output template
         output_template = os.path.join(output_dir, '%(autonumber)03d - %(title)s.%(ext)s')
