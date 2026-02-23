@@ -15,7 +15,44 @@ This installs everything: Rust, Node.js, Python venv, builds the project, sets u
 ```bash
 git clone https://github.com/pgwiz/telegram-ultra.git /opt/hermes
 cd /opt/hermes
+cp .env.example .env
+nano .env                              # fill in your tokens
 sudo bash deploy/hermes-pgwiz install
+```
+
+## Configure .env
+
+Create or edit the environment file:
+
+```bash
+nano /opt/hermes/.env
+```
+
+```env
+TELEGRAM_BOT_TOKEN=your-bot-token-from-botfather
+TELOXIDE_TOKEN=your-bot-token-from-botfather
+ADMIN_CHAT_ID=your-telegram-user-id
+DATABASE_PATH=./hermes.db
+DOWNLOAD_DIR=/opt/hermes/downloads
+JWT_SECRET=run-openssl-rand-base64-32-to-generate
+API_HOST=0.0.0.0
+API_PORT=8081
+NODE_UI_PORT=3000
+SESSION_TTL_SECS=3600
+WORKER_DIR=.
+PYTHON_BIN=/opt/hermes/.venv/bin/python
+```
+
+Generate a JWT secret:
+
+```bash
+openssl rand -base64 32
+```
+
+Or use the interactive setup:
+
+```bash
+sudo hermes-pgwiz setup-env
 ```
 
 ## Management
