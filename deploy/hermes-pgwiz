@@ -223,6 +223,17 @@ create_hermes_user() {
 setup_env() {
     local envfile="$HERMES_DIR/.env"
 
+    # Ensure we can read from the terminal even when called from a pipe
+    if [[ ! -t 0 ]] && [[ -e /dev/tty ]]; then
+        # Re-run this function with stdin from /dev/tty
+        setup_env < /dev/tty
+        return $?
+    elif [[ ! -t 0 ]]; then
+        error "Cannot run setup-env in non-interactive mode."
+        error "Please run: sudo hermes-pgwiz setup-env"
+        return 1
+    fi
+
     if [[ -f "$envfile" ]]; then
         warn ".env already exists. Edit it? (y/N)"
         read -r edit
@@ -316,8 +327,8 @@ do_install() {
     # 6. Node deps
     setup_node_deps
 
-    # 7. Configure .env
-    setup_env
+    # 7. Install the hermes-pgwiz alias early so it's available for setup-env
+    install_alias
 
     # 8. Build Rust
     build_rust
@@ -326,16 +337,26 @@ do_install() {
     install_services
     enable_services
 
-    # 10. Set up alias
-    install_alias
-
-    # 11. Create dirs
+    # 10. Create dirs
     mkdir -p "$HERMES_DIR/downloads" "$HERMES_DIR/temp"
     chown -R hermes:hermes "$HERMES_DIR"
+
+    # 11. Configure .env (skip if stdin is not a terminal, e.g. curl | bash)
+    if [[ -t 0 ]]; then
+        setup_env
+    else
+        echo ""
+        warn "Non-interactive mode detected (curl | bash)."
+        warn "Skipping .env setup. Run this after install:"
+        echo ""
+        echo -e "  ${CYAN}sudo hermes-pgwiz setup-env${NC}"
+        echo ""
+    fi
 
     echo ""
     success "Installation complete!"
     echo ""
+    echo -e "  Setup .env:      ${CYAN}sudo hermes-pgwiz setup-env${NC}"
     echo -e "  Start services:  ${CYAN}hermes-pgwiz start${NC}"
     echo -e "  Check status:    ${CYAN}hermes-pgwiz status${NC}"
     echo -e "  View logs:       ${CYAN}hermes-pgwiz logs${NC}"
