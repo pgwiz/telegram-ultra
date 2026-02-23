@@ -307,6 +307,8 @@ do_install() {
     if [[ -d "$HERMES_DIR/.git" ]]; then
         info "Repo already cloned at $HERMES_DIR"
         cd "$HERMES_DIR"
+        git checkout -- . 2>/dev/null || true
+        git clean -fd 2>/dev/null || true
         git pull --ff-only
     else
         if [[ -d "$HERMES_DIR" ]]; then
