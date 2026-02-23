@@ -49,6 +49,37 @@ async fn main() {
     // Ensure download directory exists
     std::fs::create_dir_all(&download_dir).expect("Failed to create download directory");
 
+    // Pre-flight check: verify Python can import the worker module
+    {
+        let py = python_bin.as_deref().unwrap_or(if cfg!(target_os = "windows") { "python" } else { "python3" });
+        info!("Python pre-flight check: bin={}, worker_dir={}", py, worker_dir);
+        match std::process::Command::new(py)
+            .arg("-c")
+            .arg("import worker.application; print('OK')")
+            .current_dir(&worker_dir)
+            .output()
+        {
+            Ok(output) => {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                if output.status.success() {
+                    info!("Python pre-flight OK: {}", stdout.trim());
+                } else {
+                    error!("Python pre-flight FAILED (exit {:?}):", output.status.code());
+                    for line in stderr.lines() {
+                        error!("  python: {}", line);
+                    }
+                    for line in stdout.lines() {
+                        error!("  python: {}", line);
+                    }
+                }
+            }
+            Err(e) => {
+                error!("Python pre-flight could not run: {}", e);
+            }
+        }
+    }
+
     // Initialize Python worker dispatcher
     let dispatcher = PythonDispatcher::new(
         std::path::PathBuf::from(&worker_dir),
