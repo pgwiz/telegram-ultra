@@ -354,32 +354,57 @@ do_update() {
 
     cd "$HERMES_DIR"
 
-    # 1. Pull latest
+    # 1. Protect local files that must not be overwritten
+    local env_backup=""
+    if [[ -f "$HERMES_DIR/.env" ]]; then
+        env_backup=$(mktemp)
+        cp "$HERMES_DIR/.env" "$env_backup"
+        info ".env backed up"
+    fi
+
+    # 2. Pull latest
     info "Pulling latest changes..."
+    git stash -q 2>/dev/null || true
     git pull --ff-only
+    git stash pop -q 2>/dev/null || true
     success "Code updated"
 
-    # 2. Check/install system deps
+    # 3. Restore .env if git somehow removed it
+    if [[ -n "$env_backup" ]]; then
+        if [[ ! -f "$HERMES_DIR/.env" ]]; then
+            cp "$env_backup" "$HERMES_DIR/.env"
+            warn ".env was removed by git — restored from backup"
+        fi
+        rm -f "$env_backup"
+    fi
+
+    # 4. Warn if .env is missing
+    if [[ ! -f "$HERMES_DIR/.env" ]]; then
+        error "No .env file found! Run: hermes-pgwiz setup-env"
+    fi
+
+    # 5. Check/install system deps
     info "Checking system dependencies..."
     install_system_deps
 
-    # 3. Update Python venv + deps
+    # 6. Update Python venv + deps
     setup_python_venv
 
-    # 4. Update Node deps
+    # 7. Update Node deps
     setup_node_deps
 
-    # 5. Rebuild Rust
+    # 8. Rebuild Rust
     build_rust
 
-    # 6. Reinstall service files (may have changed)
+    # 9. Reinstall service files (may have changed)
     install_services
 
-    # 7. Restart services
+    # 10. Restart services
     restart_services
 
     echo ""
     success "Update complete! Services restarted."
+    info ".env was preserved — not modified by update."
     show_status
 }
 
