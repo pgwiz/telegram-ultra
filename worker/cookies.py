@@ -24,35 +24,60 @@ class CookieManager:
 
     def get_cookie_file(self) -> Optional[str]:
         """
-        Get cookie file path for yt-dlp.
+        Get a TEMP COPY of the cookie file for yt-dlp.
 
-        Uses the uploaded cookie file directly (not a temp copy) so that
-        updates via /upcook take effect immediately.
+        yt-dlp updates (overwrites) the cookies file in place with session
+        cookies from YouTube responses. To protect the user's uploaded auth
+        cookies, we always give yt-dlp a temp copy, not the real file.
 
-        Falls back to YTDLP_COOKIES env var (writes content to temp file).
+        The copy is refreshed whenever the source file changes, so /upcook
+        updates are always picked up on the next download.
 
-        Returns cookie file path or None if unavailable.
+        Returns temp cookie file path or None if unavailable.
         """
-        # Use the configured cookie file directly — no temp copy
-        cookie_path = os.path.abspath(config.COOKIES_FILE)
-        if os.path.exists(cookie_path):
-            self.cookie_path = cookie_path
-            self.loaded = True
-            self.last_validated = datetime.now()
-            return cookie_path
+        import shutil
+        import hashlib
+
+        source_path = os.path.abspath(config.COOKIES_FILE)
+        temp_dir = tempfile.gettempdir()
+        temp_path = os.path.join(temp_dir, 'yt_cookies_working.txt')
+
+        if os.path.exists(source_path):
+            try:
+                # Compute source hash to detect /upcook updates
+                with open(source_path, 'rb') as f:
+                    source_hash = hashlib.md5(f.read()).hexdigest()
+
+                # Only copy if temp doesn't exist or source changed
+                if not os.path.exists(temp_path) or self.cookie_path != temp_path \
+                        or getattr(self, '_source_hash', None) != source_hash:
+                    shutil.copy2(source_path, temp_path)
+                    try:
+                        os.chmod(temp_path, 0o600)
+                    except Exception:
+                        pass
+                    self._source_hash = source_hash
+                    logger.info(f"Cookie working copy updated from {source_path}")
+
+                self.cookie_path = temp_path
+                self.loaded = True
+                self.last_validated = datetime.now()
+                return temp_path
+            except Exception as e:
+                logger.error(f"Failed to create cookie working copy: {e}")
+                return None
 
         # Fallback: YTDLP_COOKIES env var contains inline cookie content
         cookie_data = os.environ.get('YTDLP_COOKIES')
         if cookie_data:
             try:
-                temp_dir = tempfile.gettempdir()
-                fallback_path = os.path.join(temp_dir, 'yt_cookies_reusable.txt')
+                fallback_path = os.path.join(temp_dir, 'yt_cookies_working.txt')
                 with open(fallback_path, 'w', encoding='utf-8') as f:
                     f.write(cookie_data)
                 try:
                     os.chmod(fallback_path, 0o600)
                 except Exception:
-                    pass  # Windows may not support chmod
+                    pass
                 self.cookie_path = fallback_path
                 self.loaded = True
                 self.last_validated = datetime.now()

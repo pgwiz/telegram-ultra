@@ -101,6 +101,8 @@ async def handle_youtube_download(ipc: IPCHandler, task_id: str, request: dict) 
         command.extend([
             '--no-cache-dir',
             '--no-check-certificate',
+            # Use android + web player clients — android API bypasses VPS bot detection
+            '--extractor-args', 'youtube:player_client=android,web',
             '--progress-template', '[download] %(progress._percent_str)s at %(progress._speed_str)s ETA %(progress._eta_str)s',
         ])
 
@@ -221,11 +223,21 @@ async def _execute_download(ipc: IPCHandler, task_id: str, command: list, output
             if has_error and error_message:
                 ipc.send_error(task_id, error_message)
             else:
-                # Try to extract meaningful message from yt-dlp output
-                ytdlp_msg = next((l for l in reversed(stderr_lines) if 'ERROR' in l or 'error' in l.lower()), None)
-                if ytdlp_msg:
-                    logger.error(f"[{task_id}] yt-dlp error: {ytdlp_msg}")
-                error = get_error('UNKNOWN_ERROR')
+                # Check for known yt-dlp error patterns in the full output
+                all_output = ' '.join(stderr_lines).lower()
+                if 'sign in to confirm' in all_output or 'confirm you\'re not a bot' in all_output:
+                    error = get_error('BOT_DETECTION')
+                elif 'private video' in all_output or 'video is private' in all_output:
+                    error = get_error('VIDEO_PRIVATE')
+                elif 'video unavailable' in all_output or 'has been removed' in all_output:
+                    error = get_error('VIDEO_REMOVED')
+                elif 'no suitable format' in all_output:
+                    error = get_error('NO_SUITABLE_FORMAT')
+                else:
+                    ytdlp_msg = next((l for l in reversed(stderr_lines) if 'ERROR' in l), None)
+                    if ytdlp_msg:
+                        logger.error(f"[{task_id}] yt-dlp error: {ytdlp_msg}")
+                    error = get_error('UNKNOWN_ERROR')
                 ipc.send_error(task_id, error.user_message, error.code)
             return
 

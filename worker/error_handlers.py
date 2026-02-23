@@ -69,6 +69,13 @@ ERROR_DEFINITIONS = {
     ),
 
     # Auth-related errors (often fixable by user)
+    'BOT_DETECTION': WorkerError(
+        code='BOT_DETECTION',
+        user_message='YouTube thinks this server is a bot. Fresh cookies from your browser are required. Upload via /upcook.',
+        technical_message='YouTube bot detection triggered - Sign in to confirm',
+        category=ErrorCategory.AUTH_RELATED,
+        retriable=False,
+    ),
     'REQUIRE_AUTH': WorkerError(
         code='REQUIRE_AUTH',
         user_message='Age-restricted content - need fresh cookies. Use /help for instructions.',
