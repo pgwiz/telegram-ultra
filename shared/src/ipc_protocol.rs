@@ -172,7 +172,7 @@ pub fn download_request(
         .with_params(serde_json::json!({
             "extract_audio": extract_audio,
             "audio_format": "mp3",
-            "audio_quality": "192",
+            "audio_quality": "0",
             "output_dir": output_dir,
         }))
 }
