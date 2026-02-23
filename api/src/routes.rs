@@ -7,7 +7,7 @@ use axum::Json;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio_util::io::ReaderStream;
-use tracing::{info, warn};
+use tracing::{info, warn, error};
 
 use hermes_shared::db;
 
@@ -66,6 +66,18 @@ pub struct BatchDownloadBody {
 pub struct UpdateTaskBody {
     pub url: Option<String>,
     pub label: Option<String>,
+}
+
+#[derive(Deserialize)]
+pub struct LogsQuery {
+    /// Comma-separated service names: hermes-bot,hermes-api,hermes-ui
+    pub service: Option<String>,
+    /// Number of lines (default 200, max 1000)
+    pub lines: Option<u32>,
+    /// Time filter: "1h", "6h", "24h", "7d"
+    pub since: Option<String>,
+    /// Minimum log level: "error", "warning", "info", "debug"
+    pub level: Option<String>,
 }
 
 // ====== AUTH ROUTES ======
@@ -671,5 +683,167 @@ pub async fn admin_users(
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({ "error": format!("{}", e) })),
         )),
+    }
+}
+
+/// GET /api/admin/logs - Fetch recent system logs from journald
+pub async fn admin_logs(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Query(query): Query<LogsQuery>,
+) -> Result<(StatusCode, Json<serde_json::Value>), (StatusCode, Json<auth::ErrorBody>)> {
+    let _admin = auth::authenticate_admin(&headers, &state).await?;
+
+    // Validate and parse service names (whitelist only known services)
+    let allowed_services = ["hermes-bot", "hermes-api", "hermes-ui"];
+    let services: Vec<&str> = match &query.service {
+        Some(s) => s.split(',')
+            .map(|v| v.trim())
+            .filter(|v| allowed_services.contains(v))
+            .collect(),
+        None => allowed_services.to_vec(),
+    };
+
+    if services.is_empty() {
+        return Ok((StatusCode::BAD_REQUEST, Json(serde_json::json!({
+            "error": "No valid service names. Use: hermes-bot, hermes-api, hermes-ui"
+        }))));
+    }
+
+    // Clamp lines
+    let lines = query.lines.unwrap_or(200).min(1000);
+
+    // Validate since parameter
+    let since = match query.since.as_deref() {
+        Some("1h") => Some("1 hour ago"),
+        Some("6h") => Some("6 hours ago"),
+        Some("24h") => Some("24 hours ago"),
+        Some("7d") => Some("7 days ago"),
+        Some(_) => {
+            return Ok((StatusCode::BAD_REQUEST, Json(serde_json::json!({
+                "error": "Invalid 'since' value. Use: 1h, 6h, 24h, 7d"
+            }))));
+        }
+        None => None,
+    };
+
+    // Validate priority level (journald priority numbers)
+    let priority = match query.level.as_deref() {
+        Some("error") | Some("err") => Some("3"),
+        Some("warning") | Some("warn") => Some("4"),
+        Some("info") => Some("6"),
+        Some("debug") => Some("7"),
+        Some(_) => {
+            return Ok((StatusCode::BAD_REQUEST, Json(serde_json::json!({
+                "error": "Invalid 'level' value. Use: error, warning, info, debug"
+            }))));
+        }
+        None => None,
+    };
+
+    // Build journalctl command
+    let mut cmd = tokio::process::Command::new("journalctl");
+
+    // Add unit filters
+    for svc in &services {
+        cmd.arg("-u").arg(svc);
+    }
+
+    cmd.arg("--no-pager");
+    cmd.arg("--output=json");
+    cmd.arg(format!("--lines={}", lines));
+    cmd.arg("--reverse"); // newest first
+
+    if let Some(s) = since {
+        cmd.arg(format!("--since={}", s));
+    }
+
+    if let Some(p) = priority {
+        cmd.arg(format!("--priority={}", p));
+    }
+
+    // Execute
+    match cmd.output().await {
+        Ok(output) => {
+            if !output.status.success() {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                error!("journalctl failed: {}", stderr);
+                return Ok((StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({
+                    "error": format!("journalctl failed: {}", stderr.chars().take(200).collect::<String>())
+                }))));
+            }
+
+            let stdout = String::from_utf8_lossy(&output.stdout);
+
+            // Parse each JSON line from journalctl --output=json
+            let mut logs: Vec<serde_json::Value> = Vec::new();
+            for line in stdout.lines() {
+                if line.trim().is_empty() {
+                    continue;
+                }
+                match serde_json::from_str::<serde_json::Value>(line) {
+                    Ok(entry) => {
+                        // Extract relevant fields
+                        let timestamp = entry.get("__REALTIME_TIMESTAMP")
+                            .and_then(|v| v.as_str())
+                            .and_then(|s| s.parse::<u64>().ok())
+                            .map(|us| {
+                                // Convert microseconds to ISO 8601
+                                let secs = (us / 1_000_000) as i64;
+                                let nanos = ((us % 1_000_000) * 1000) as u32;
+                                chrono::DateTime::from_timestamp(secs, nanos)
+                                    .map(|dt| dt.format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string())
+                                    .unwrap_or_default()
+                            })
+                            .unwrap_or_default();
+
+                        let service = entry.get("SYSLOG_IDENTIFIER")
+                            .or_else(|| entry.get("_SYSTEMD_UNIT"))
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("unknown")
+                            .to_string();
+
+                        let message = entry.get("MESSAGE")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string();
+
+                        let priority_num = entry.get("PRIORITY")
+                            .and_then(|v| v.as_str())
+                            .and_then(|s| s.parse::<u8>().ok())
+                            .unwrap_or(6);
+
+                        let level = match priority_num {
+                            0..=3 => "error",
+                            4 => "warn",
+                            5..=6 => "info",
+                            _ => "debug",
+                        };
+
+                        logs.push(serde_json::json!({
+                            "timestamp": timestamp,
+                            "service": service,
+                            "level": level,
+                            "message": message,
+                        }));
+                    }
+                    Err(_) => {
+                        // Skip malformed lines
+                    }
+                }
+            }
+
+            Ok((StatusCode::OK, Json(serde_json::json!({
+                "logs": logs,
+                "count": logs.len(),
+                "services": services,
+            }))))
+        }
+        Err(e) => {
+            error!("Failed to execute journalctl: {}", e);
+            Ok((StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({
+                "error": format!("Cannot read logs: {}", e)
+            }))))
+        }
     }
 }

@@ -219,6 +219,11 @@ create_hermes_user() {
         useradd -r -m -d /opt/hermes -s /bin/bash hermes
         success "User 'hermes' created"
     fi
+
+    # Ensure hermes can read journald logs (for admin log viewer)
+    if getent group systemd-journal &>/dev/null; then
+        usermod -aG systemd-journal hermes 2>/dev/null || true
+    fi
 }
 
 setup_env() {

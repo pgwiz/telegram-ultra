@@ -124,6 +124,7 @@ async fn main() -> anyhow::Result<()> {
         // Admin routes
         .route("/api/admin/stats", get(routes::admin_stats))
         .route("/api/admin/users", get(routes::admin_users))
+        .route("/api/admin/logs", get(routes::admin_logs))
         .layer(cors)
         .layer(axum::Extension(state.clone()))
         .with_state(state);

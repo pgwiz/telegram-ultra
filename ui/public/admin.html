@@ -86,12 +86,61 @@
             <button class="btn btn-blue btn-sm" onclick="refreshAdmin()">Refresh Data</button>
             <button class="btn btn-danger btn-sm" style="margin-left:8px" onclick="forceCleanup()">Force Cleanup</button>
         </div>
+
+        <!-- System Logs -->
+        <div class="card" style="margin-top:16px">
+            <div class="card-header" style="display:flex; justify-content:space-between; align-items:center">
+                <span>System Logs</span>
+                <div style="display:flex; gap:8px; align-items:center">
+                    <label style="font-size:0.8em; color:var(--marble-white); cursor:pointer">
+                        <input type="checkbox" id="logsAutoRefresh" style="margin-right:4px"> Auto
+                    </label>
+                    <button class="btn btn-blue btn-sm" onclick="loadLogs()">Refresh</button>
+                </div>
+            </div>
+
+            <!-- Filters -->
+            <div style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:12px; align-items:center">
+                <select id="logService" onchange="loadLogs()" style="padding:4px 8px; border-radius:4px; background:var(--dark-wood); color:var(--marble-white); border:1px solid var(--aegean-blue)">
+                    <option value="">All Services</option>
+                    <option value="hermes-bot">Bot</option>
+                    <option value="hermes-api">API</option>
+                    <option value="hermes-ui">UI</option>
+                </select>
+                <select id="logSince" onchange="loadLogs()" style="padding:4px 8px; border-radius:4px; background:var(--dark-wood); color:var(--marble-white); border:1px solid var(--aegean-blue)">
+                    <option value="1h">Last 1 hour</option>
+                    <option value="6h">Last 6 hours</option>
+                    <option value="24h" selected>Last 24 hours</option>
+                    <option value="7d">Last 7 days</option>
+                </select>
+                <select id="logLevel" onchange="loadLogs()" style="padding:4px 8px; border-radius:4px; background:var(--dark-wood); color:var(--marble-white); border:1px solid var(--aegean-blue)">
+                    <option value="">All Levels</option>
+                    <option value="error">Errors Only</option>
+                    <option value="warning">Warnings+</option>
+                    <option value="info">Info+</option>
+                </select>
+                <select id="logLines" onchange="loadLogs()" style="padding:4px 8px; border-radius:4px; background:var(--dark-wood); color:var(--marble-white); border:1px solid var(--aegean-blue)">
+                    <option value="100">100 lines</option>
+                    <option value="200" selected>200 lines</option>
+                    <option value="500">500 lines</option>
+                    <option value="1000">1000 lines</option>
+                </select>
+                <span id="logCount" style="font-size:0.8em; color:var(--text-secondary); margin-left:auto"></span>
+            </div>
+
+            <!-- Log Output -->
+            <div id="logOutput" style="background:#1a1a1a; border-radius:6px; padding:12px; max-height:600px; overflow-y:auto; font-family:monospace; font-size:0.82em; line-height:1.5; color:#ccc">
+                <div class="loading"><div class="spinner"></div></div>
+            </div>
+        </div>
     </main>
 
     <div class="toast-container" id="toasts"></div>
     <script src="/assets/app.js"></script>
     <script>
         hermesInit('admin');
+
+        let logAutoInterval = null;
 
         async function refreshAdmin() {
             await loadAdminData();
@@ -101,6 +150,76 @@
         function forceCleanup() {
             showToast('Cleanup triggered', 'success');
         }
+
+        async function loadLogs() {
+            const service = document.getElementById('logService').value;
+            const since = document.getElementById('logSince').value;
+            const level = document.getElementById('logLevel').value;
+            const lines = document.getElementById('logLines').value;
+            const output = document.getElementById('logOutput');
+            const countEl = document.getElementById('logCount');
+
+            let params = new URLSearchParams();
+            if (service) params.set('service', service);
+            if (since) params.set('since', since);
+            if (level) params.set('level', level);
+            if (lines) params.set('lines', lines);
+
+            const data = await api.get('/api/admin/logs?' + params.toString());
+            if (!data) return;
+
+            if (data.error) {
+                output.innerHTML = '<span style="color:#f44">' + escapeHtml(data.error) + '</span>';
+                countEl.textContent = '';
+                return;
+            }
+
+            const logs = data.logs || [];
+            countEl.textContent = logs.length + ' entries';
+
+            if (logs.length === 0) {
+                output.innerHTML = '<span style="color:#888">No log entries found for the selected filters.</span>';
+                return;
+            }
+
+            output.innerHTML = logs.map(function(entry) {
+                var ts = entry.timestamp ? entry.timestamp.substring(11, 23) : '';
+                var levelColor = '#ccc';
+                var levelTag = entry.level || 'info';
+                if (levelTag === 'error') levelColor = '#f44';
+                else if (levelTag === 'warn') levelColor = '#fa0';
+                else if (levelTag === 'info') levelColor = '#4af';
+                else if (levelTag === 'debug') levelColor = '#888';
+
+                var svcColor = '#aaa';
+                var svc = entry.service || '';
+                if (svc === 'hermes-bot') svcColor = '#8f8';
+                else if (svc === 'hermes-api') svcColor = '#88f';
+                else if (svc === 'hermes-ui') svcColor = '#f8f';
+
+                var svcShort = svc.replace('hermes-', '');
+
+                return '<div style="margin-bottom:2px; word-break:break-all">'
+                    + '<span style="color:#888">' + escapeHtml(ts) + '</span> '
+                    + '<span style="color:' + levelColor + '; font-weight:bold">' + escapeHtml(levelTag.toUpperCase().padEnd(5)) + '</span> '
+                    + '<span style="color:' + svcColor + '">[' + escapeHtml(svcShort) + ']</span> '
+                    + '<span>' + escapeHtml(entry.message || '') + '</span>'
+                    + '</div>';
+            }).join('');
+        }
+
+        // Auto-refresh toggle
+        document.getElementById('logsAutoRefresh').addEventListener('change', function() {
+            if (this.checked) {
+                logAutoInterval = setInterval(loadLogs, 5000);
+            } else {
+                if (logAutoInterval) clearInterval(logAutoInterval);
+                logAutoInterval = null;
+            }
+        });
+
+        // Initial load
+        loadLogs();
     </script>
 </body>
 </html>
