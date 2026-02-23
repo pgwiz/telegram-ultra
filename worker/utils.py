@@ -5,9 +5,53 @@ Path sanitization, formatting, and helpers
 
 import os
 import re
+import glob as _glob
 import shutil
 from pathlib import Path
 from typing import Optional
+
+
+def find_node_binary() -> Optional[str]:
+    """
+    Find the Node.js binary for yt-dlp EJS challenge solving.
+
+    Search order:
+    1. NODE_BIN env var
+    2. PATH (node / nodejs)
+    3. nvm directories scanned dynamically (no hardcoded versions)
+    4. Common fixed install paths
+
+    Returns:
+        Path to node binary, or None if not found
+    """
+    # Env var takes priority
+    node_bin = os.getenv('NODE_BIN', '').strip()
+    if node_bin and os.path.isfile(node_bin):
+        return node_bin
+
+    # Check PATH
+    node = shutil.which('node') or shutil.which('nodejs')
+    if node:
+        return node
+
+    # Scan nvm directories dynamically so we don't need to hardcode versions
+    nvm_patterns = [
+        '/root/.nvm/versions/node/*/bin/node',
+        '/home/*/.nvm/versions/node/*/bin/node',
+    ]
+    for pattern in nvm_patterns:
+        matches = _glob.glob(pattern)
+        if matches:
+            # Sort descending so the newest semver is first (v24 > v22 > v20 …)
+            matches.sort(reverse=True)
+            return matches[0]
+
+    # Common fixed paths as a last resort
+    for path in ('/usr/local/bin/node', '/usr/bin/node'):
+        if os.path.isfile(path):
+            return path
+
+    return None
 
 
 def sanitize_filename(filename: str, max_length: int = 200) -> str:

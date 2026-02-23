@@ -15,7 +15,7 @@ from typing import List, Dict, Any, Optional
 from worker.config import config
 from worker.ipc import IPCHandler
 from worker.cookies import get_yt_dlp_cookie_args
-from worker.utils import sanitize_filename, sanitize_folder_name, safe_mkdir, safe_rmtree
+from worker.utils import sanitize_filename, sanitize_folder_name, safe_mkdir, safe_rmtree, find_node_binary
 from worker.error_handlers import categorize_error, get_error
 from worker.progress_hooks import StreamProgressCollector
 
@@ -202,6 +202,11 @@ async def _download_playlist_tracks(ipc: IPCHandler, task_id: str, url: str, out
 
         # Cookies
         command.extend(get_yt_dlp_cookie_args())
+
+        # JS runtime for signature/n-challenge solving
+        node_bin = find_node_binary()
+        if node_bin:
+            command.extend(['--js-runtimes', f'node:{node_bin}'])
 
         logger.debug(f"[{task_id}] Playlist download command: {command[0]} ... (length: {len(command)})")
 
