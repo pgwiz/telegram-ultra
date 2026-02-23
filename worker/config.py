@@ -17,6 +17,8 @@ class WorkerConfig:
 
     # Download constraints
     BEST_AUDIO_LIMIT_MB: int = int(os.getenv('BEST_AUDIO_LIMIT_MB', '15'))
+    # Path to node binary for yt-dlp JS challenges. Auto-detected if blank.
+    NODE_BIN: str = os.getenv('NODE_BIN', '')
     MAX_RETRIES: int = int(os.getenv('MAX_RETRIES', '3'))
     RETRY_DELAY_SECONDS: int = int(os.getenv('RETRY_DELAY_SECONDS', '5'))
 

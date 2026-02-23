@@ -4,6 +4,7 @@ Handles video downloads with progress tracking and error recovery
 """
 
 import os
+import shutil
 import subprocess
 import sys
 import logging
@@ -105,6 +106,25 @@ async def handle_youtube_download(ipc: IPCHandler, task_id: str, request: dict) 
             '--extractor-args', 'youtube:player_client=android,web',
             '--progress-template', '[download] %(progress._percent_str)s at %(progress._speed_str)s ETA %(progress._eta_str)s',
         ])
+
+        # Add JS runtime so yt-dlp can solve YouTube's signature challenge.
+        # Without this, yt-dlp falls back to deno (not installed) and some
+        # formats are unavailable. Auto-detect node from config or PATH.
+        node_bin = config.NODE_BIN or shutil.which('node') or shutil.which('nodejs')
+        # Also check common nvm install paths
+        if not node_bin:
+            nvm_candidates = [
+                '/root/.nvm/versions/node/v24.13.1/bin/node',
+                '/root/.nvm/versions/node/v22.0.0/bin/node',
+                '/home/hermes/.nvm/versions/node/v24.13.1/bin/node',
+                '/usr/local/bin/node',
+            ]
+            node_bin = next((p for p in nvm_candidates if os.path.exists(p)), None)
+        if node_bin:
+            command.extend(['--js-runtimes', f'node:{node_bin}'])
+            logger.debug(f'[{task_id}] Using JS runtime: {node_bin}')
+        else:
+            logger.warning(f'[{task_id}] No node binary found — JS challenges may fail')
 
         logger.debug(f"[{task_id}] Command: {' '.join(command[:3])} ... (length: {len(command)})")
 
