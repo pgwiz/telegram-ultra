@@ -115,6 +115,7 @@ async def handle_youtube_download(ipc: IPCHandler, task_id: str, request: dict) 
         node_bin = find_node_binary()
         if node_bin:
             command.extend(['--js-runtimes', f'node:{node_bin}'])
+            command.extend(['--remote-components', 'ejs:github'])
             logger.debug(f'[{task_id}] Using JS runtime: {node_bin}')
         else:
             logger.warning(f'[{task_id}] No node binary found — JS challenges may fail')
