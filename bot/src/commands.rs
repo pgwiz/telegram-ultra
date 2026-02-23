@@ -107,7 +107,7 @@ Commands:
 /help - Show this message
 
 Admin:
-/upcook <cookies> - Update cookies.txt
+/upcook [cookies] - Update cookies.txt
 
 You can also just paste a YouTube link directly!";
     bot.send_message(msg.chat.id, text).await?;
@@ -853,10 +853,18 @@ async fn cmd_upcook(
     }
 
     let content = content.trim().to_string();
+
+    // Strip surrounding brackets: /upcook [content] → content
+    let content = if content.starts_with('[') && content.ends_with(']') {
+        content[1..content.len()-1].trim().to_string()
+    } else {
+        content
+    };
+
     if content.is_empty() {
         bot.send_message(msg.chat.id,
-            "Usage: /upcook <cookie content>\n\n\
-             Paste the full Netscape cookie file content after the command."
+            "Usage: /upcook [cookie content]\n\n\
+             Paste the Netscape cookie file content inside brackets."
         ).await?;
         return Ok(());
     }
