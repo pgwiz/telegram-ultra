@@ -141,18 +141,19 @@ setup_node_lts() {
     fi
 
     if [[ "$node_ok" == "true" ]]; then
-        # Ensure the binary is at /usr/local/bin/node (accessible with ProtectHome=true)
+        # Copy the binary to /usr/local/bin/node (not symlink — symlinks into /root/.nvm are
+        # inaccessible to the hermes service because ProtectHome=true hides /root at runtime)
         local node_path
         node_path=$(command -v node)
         if [[ "$node_path" != "/usr/local/bin/node" ]]; then
-            ln -sf "$node_path" /usr/local/bin/node 2>/dev/null || true
-            # Also symlink npm
+            cp -f "$node_path" /usr/local/bin/node 2>/dev/null && chmod 755 /usr/local/bin/node || true
+            # npm only needed at build time (as root, /root/.nvm accessible) — symlink is fine
             local npm_path
             npm_path="$(dirname "$node_path")/npm"
             if [[ -x "$npm_path" ]]; then
                 ln -sf "$npm_path" /usr/local/bin/npm 2>/dev/null || true
             fi
-            info "Symlinked node/npm -> /usr/local/bin/"
+            info "Copied node binary -> /usr/local/bin/node (real file, not symlink)"
         fi
         return 0
     fi
@@ -170,18 +171,19 @@ setup_node_lts() {
     nvm install --lts
     nvm use --lts
 
-    # Symlink to /usr/local/bin so hermes service (ProtectHome=true) can find it
+    # Copy to /usr/local/bin/node as a REAL FILE (not symlink) so hermes service
+    # (ProtectHome=true) can execute it — symlinks into /root/.nvm are blocked at runtime
     local new_node
     new_node=$(command -v node 2>/dev/null || nvm which current 2>/dev/null || echo "")
     if [[ -n "$new_node" && -x "$new_node" ]]; then
-        ln -sf "$new_node" /usr/local/bin/node
-        # Also symlink npm (same directory as node)
+        cp -f "$new_node" /usr/local/bin/node && chmod 755 /usr/local/bin/node
+        # npm is only used at build time by root — symlink is fine for it
         local new_npm
         new_npm="$(dirname "$new_node")/npm"
         if [[ -x "$new_npm" ]]; then
             ln -sf "$new_npm" /usr/local/bin/npm
         fi
-        success "Node.js $(node --version) installed → /usr/local/bin/node"
+        success "Node.js $(node --version) installed → /usr/local/bin/node (real file)"
     else
         error "nvm install completed but node binary not found — set NODE_BIN manually in .env"
     fi

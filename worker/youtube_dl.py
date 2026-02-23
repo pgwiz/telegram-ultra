@@ -4,7 +4,6 @@ Handles video downloads with progress tracking and error recovery
 """
 
 import os
-import shutil
 import subprocess
 import sys
 import logging
@@ -13,7 +12,7 @@ from typing import Optional
 from worker.config import config
 from worker.ipc import IPCHandler
 from worker.cookies import get_yt_dlp_cookie_args
-from worker.utils import sanitize_filename, safe_mkdir, file_exists_and_valid
+from worker.utils import sanitize_filename, safe_mkdir, file_exists_and_valid, find_node_binary
 from worker.error_handlers import categorize_error, get_error
 from worker.progress_hooks import StreamProgressCollector
 
@@ -99,27 +98,21 @@ async def handle_youtube_download(ipc: IPCHandler, task_id: str, request: dict) 
         command.extend(cookie_args)
 
         # Other flags
+        # android client bypasses VPS bot detection but doesn't support cookies.
+        # Use android+web when no cookies (android handles bot detection),
+        # or web-only when cookies are present (android would just be skipped).
+        player_clients = 'web' if cookie_args else 'android,web'
         command.extend([
             '--no-cache-dir',
             '--no-check-certificate',
-            # Use android + web player clients — android API bypasses VPS bot detection
-            '--extractor-args', 'youtube:player_client=android,web',
+            '--extractor-args', f'youtube:player_client={player_clients}',
             '--progress-template', '[download] %(progress._percent_str)s at %(progress._speed_str)s ETA %(progress._eta_str)s',
         ])
 
         # Add JS runtime so yt-dlp can solve YouTube's signature challenge.
         # Without this, yt-dlp falls back to deno (not installed) and some
         # formats are unavailable. Auto-detect node from config or PATH.
-        node_bin = config.NODE_BIN or shutil.which('node') or shutil.which('nodejs')
-        # Also check common nvm install paths
-        if not node_bin:
-            nvm_candidates = [
-                '/root/.nvm/versions/node/v24.13.1/bin/node',
-                '/root/.nvm/versions/node/v22.0.0/bin/node',
-                '/home/hermes/.nvm/versions/node/v24.13.1/bin/node',
-                '/usr/local/bin/node',
-            ]
-            node_bin = next((p for p in nvm_candidates if os.path.exists(p)), None)
+        node_bin = find_node_binary()
         if node_bin:
             command.extend(['--js-runtimes', f'node:{node_bin}'])
             logger.debug(f'[{task_id}] Using JS runtime: {node_bin}')

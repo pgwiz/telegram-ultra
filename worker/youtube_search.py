@@ -13,7 +13,7 @@ from typing import List, Dict, Any
 from worker.config import config
 from worker.ipc import IPCHandler
 from worker.cookies import get_yt_dlp_cookie_args
-from worker.utils import validate_search_query
+from worker.utils import validate_search_query, find_node_binary
 from worker.error_handlers import categorize_error, get_error
 from worker.cache import SearchCache, MetadataCache
 
@@ -384,6 +384,16 @@ async def handle_get_formats(ipc: IPCHandler, task_id: str, request: dict) -> No
 
         cookie_args = get_yt_dlp_cookie_args()
         command.extend(cookie_args)
+
+        # android client bypasses bot detection but doesn't support cookies —
+        # use web-only when cookies are present, android+web otherwise
+        player_clients = 'web' if cookie_args else 'android,web'
+        command.extend(['--extractor-args', f'youtube:player_client={player_clients}'])
+
+        # JS runtime for signature/n-challenge solving
+        node_bin = find_node_binary()
+        if node_bin:
+            command.extend(['--js-runtimes', f'node:{node_bin}'])
 
         process = await asyncio.create_subprocess_exec(
             *command,
