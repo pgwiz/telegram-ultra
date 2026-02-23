@@ -727,12 +727,14 @@ pub async fn admin_logs(
         None => None,
     };
 
-    // Validate priority level (journald priority numbers)
-    let priority = match query.level.as_deref() {
-        Some("error") | Some("err") => Some("3"),
-        Some("warning") | Some("warn") => Some("4"),
-        Some("info") => Some("6"),
-        Some("debug") => Some("7"),
+    // Validate level filter (applied post-fetch since journald --priority
+    // doesn't work for tracing-based logs — all entries share the same
+    // systemd priority regardless of tracing level).
+    let level_filter: Option<&str> = match query.level.as_deref() {
+        Some("error") | Some("err") => Some("error"),
+        Some("warning") | Some("warn") => Some("warn"),
+        Some("info") => Some("info"),
+        Some("debug") => Some("debug"),
         Some(_) => {
             return Ok((StatusCode::BAD_REQUEST, Json(serde_json::json!({
                 "error": "Invalid 'level' value. Use: error, warning, info, debug"
@@ -740,6 +742,9 @@ pub async fn admin_logs(
         }
         None => None,
     };
+
+    // When filtering by level, fetch extra lines since we filter after parsing.
+    let fetch_lines = if level_filter.is_some() { lines * 5 } else { lines };
 
     // Build journalctl command
     let mut cmd = tokio::process::Command::new("journalctl");
@@ -751,15 +756,11 @@ pub async fn admin_logs(
 
     cmd.arg("--no-pager");
     cmd.arg("--output=json");
-    cmd.arg(format!("--lines={}", lines));
+    cmd.arg(format!("--lines={}", fetch_lines));
     cmd.arg("--reverse"); // newest first
 
     if let Some(s) = since {
         cmd.arg(format!("--since={}", s));
-    }
-
-    if let Some(p) = priority {
-        cmd.arg(format!("--priority={}", p));
     }
 
     // Execute
@@ -834,12 +835,28 @@ pub async fn admin_logs(
                             }
                         };
 
+                        // Post-fetch level filter: skip entries below requested level
+                        let dominated = match level_filter {
+                            Some("error") => level != "error",
+                            Some("warn") => level == "info" || level == "debug",
+                            Some("info") => level == "debug",
+                            _ => false,
+                        };
+                        if dominated {
+                            continue;
+                        }
+
                         logs.push(serde_json::json!({
                             "timestamp": timestamp,
                             "service": service,
                             "level": level,
                             "message": message,
                         }));
+
+                        // Stop once we have enough entries
+                        if logs.len() >= lines as usize {
+                            break;
+                        }
                     }
                     Err(_) => {
                         // Skip malformed lines
