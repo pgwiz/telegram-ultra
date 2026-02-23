@@ -15,7 +15,8 @@
 #   hermes-pgwiz logs [svc]   Tail logs (bot|api|ui or all)
 #   hermes-pgwiz build        Build Rust crates (release)
 #   hermes-pgwiz setup-env    Create/edit .env interactively
-#   hermes-pgwiz auto-p       Auto-detect Python env vars
+#   hermes-pgwiz auto-p       Auto-detect Python + Node env vars (PYTHON_BIN, WORKER_DIR, NODE_BIN)
+#   hermes-pgwiz setup-node   Install/upgrade Node.js LTS via nvm (v17+ for yt-dlp)
 ###############################################################################
 set -euo pipefail
 
@@ -68,7 +69,6 @@ install_system_deps() {
         curl git \
         python3 python3-venv python3-pip \
         ffmpeg \
-        nodejs npm \
         sqlite3 >/dev/null 2>&1
     success "System packages installed"
 }
@@ -117,6 +117,74 @@ setup_node_deps() {
     npm install --production -q 2>/dev/null
     success "Node.js dependencies installed"
     cd "$HERMES_DIR"
+}
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  NODE.JS LTS (via nvm) — needed for yt-dlp JS signature solver
+# ══════════════════════════════════════════════════════════════════════════════
+setup_node_lts() {
+    local min_ver=17
+    local node_ok=false
+
+    # Check if a sufficient node is already present
+    if command -v node &>/dev/null; then
+        local cur_ver
+        cur_ver=$(node --version 2>/dev/null | sed 's/v//' | cut -d. -f1)
+        if [[ -n "$cur_ver" ]] && [[ "$cur_ver" -ge "$min_ver" ]] 2>/dev/null; then
+            success "Node.js $(node --version) meets minimum v${min_ver} for yt-dlp JS runtime"
+            node_ok=true
+        else
+            warn "Node.js v${cur_ver} is below v${min_ver} — upgrading via nvm"
+        fi
+    else
+        warn "Node.js not found (system apt nodejs is v12 — too old for yt-dlp)"
+    fi
+
+    if [[ "$node_ok" == "true" ]]; then
+        # Ensure the binary is at /usr/local/bin/node (accessible with ProtectHome=true)
+        local node_path
+        node_path=$(command -v node)
+        if [[ "$node_path" != "/usr/local/bin/node" ]]; then
+            ln -sf "$node_path" /usr/local/bin/node 2>/dev/null || true
+            # Also symlink npm
+            local npm_path
+            npm_path="$(dirname "$node_path")/npm"
+            if [[ -x "$npm_path" ]]; then
+                ln -sf "$npm_path" /usr/local/bin/npm 2>/dev/null || true
+            fi
+            info "Symlinked node/npm -> /usr/local/bin/"
+        fi
+        return 0
+    fi
+
+    info "Installing Node.js LTS via nvm..."
+    export NVM_DIR="${NVM_DIR:-$HOME/.nvm}"
+
+    if [[ ! -s "$NVM_DIR/nvm.sh" ]]; then
+        curl -fsSL https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.7/install.sh | bash
+    fi
+
+    # shellcheck disable=SC1091
+    source "$NVM_DIR/nvm.sh"
+
+    nvm install --lts
+    nvm use --lts
+
+    # Symlink to /usr/local/bin so hermes service (ProtectHome=true) can find it
+    local new_node
+    new_node=$(command -v node 2>/dev/null || nvm which current 2>/dev/null || echo "")
+    if [[ -n "$new_node" && -x "$new_node" ]]; then
+        ln -sf "$new_node" /usr/local/bin/node
+        # Also symlink npm (same directory as node)
+        local new_npm
+        new_npm="$(dirname "$new_node")/npm"
+        if [[ -x "$new_npm" ]]; then
+            ln -sf "$new_npm" /usr/local/bin/npm
+        fi
+        success "Node.js $(node --version) installed → /usr/local/bin/node"
+    else
+        error "nvm install completed but node binary not found — set NODE_BIN manually in .env"
+    fi
 }
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -279,6 +347,8 @@ NODE_UI_PORT=${ui_port}
 SESSION_TTL_SECS=${session_ttl}
 WORKER_DIR=.
 PYTHON_BIN=${PYTHON_BIN}
+# Path to node binary for yt-dlp JS challenges (v17+ required). Auto-set by auto-p.
+NODE_BIN=
 ENVEOF
 
     chown hermes:hermes "$envfile" 2>/dev/null || true
@@ -303,13 +373,16 @@ do_install() {
     # 1. System deps
     install_system_deps
 
-    # 2. Rust
+    # 2. Node.js LTS (yt-dlp JS runtime needs v17+)
+    setup_node_lts
+
+    # 3. Rust
     install_rust
 
-    # 3. Create user
+    # 4. Create user
     create_hermes_user
 
-    # 4. Clone repo
+    # 5. Clone repo
     if [[ -d "$HERMES_DIR/.git" ]]; then
         info "Repo already cloned at $HERMES_DIR"
         cd "$HERMES_DIR"
@@ -421,6 +494,9 @@ do_update() {
     info "Checking system dependencies..."
     install_system_deps
 
+    # 5b. Check/upgrade Node.js (must be v17+ for yt-dlp JS runtime)
+    setup_node_lts
+
     # 6. Update Python venv + deps
     setup_python_venv
 
@@ -504,10 +580,45 @@ auto_python_env() {
     local py_ver
     py_ver=$("$py_bin" --version 2>&1) || py_ver="unknown"
 
+    # 4. Detect Node.js binary for yt-dlp JS runtime (needs v17+)
+    local node_bin=""
+    # Prefer /usr/local/bin/node (symlinked by setup_node_lts, accessible with ProtectHome=true)
+    if [[ -x /usr/local/bin/node ]]; then
+        local cur_ver
+        cur_ver=$(/usr/local/bin/node --version 2>/dev/null | sed 's/v//' | cut -d. -f1)
+        if [[ -n "$cur_ver" ]] && [[ "$cur_ver" -ge 17 ]] 2>/dev/null; then
+            node_bin="/usr/local/bin/node"
+        fi
+    fi
+    # Fallback: any node in PATH with version >= 17
+    if [[ -z "$node_bin" ]] && command -v node &>/dev/null; then
+        local cur_ver
+        cur_ver=$(node --version 2>/dev/null | sed 's/v//' | cut -d. -f1)
+        if [[ -n "$cur_ver" ]] && [[ "$cur_ver" -ge 17 ]] 2>/dev/null; then
+            node_bin=$(command -v node)
+        else
+            warn "Node.js v${cur_ver} found but < v17 (too old). Run: hermes-pgwiz setup-node"
+        fi
+    fi
+    if [[ -z "$node_bin" ]]; then
+        warn "No suitable Node.js (v17+) found. JS challenges may fail. Run: hermes-pgwiz setup-node"
+    fi
+    if [[ -n "$node_bin" ]]; then
+        set_env_var "NODE_BIN" "$node_bin" "$envfile"
+    fi
+
+    local node_ver_str
+    if [[ -n "$node_bin" ]]; then
+        node_ver_str=$("$node_bin" --version 2>&1) || node_ver_str="unknown"
+    else
+        node_ver_str="not found"
+    fi
+
     echo ""
     success "Python environment configured:"
     echo -e "  PYTHON_BIN  = ${CYAN}${py_bin}${NC}  (${py_ver})"
     echo -e "  WORKER_DIR  = ${CYAN}${w_dir}${NC}"
+    echo -e "  NODE_BIN    = ${CYAN}${node_bin:-<not set>}${NC}  (${node_ver_str})"
     echo ""
 }
 
@@ -592,6 +703,7 @@ main() {
         build)         build_rust ;;
         setup-env)     need_root; setup_env ;;
         auto-p)        need_root; auto_python_env ;;
+        setup-node)    need_root; setup_node_lts ;;
         --menu|menu)   interactive_menu ;;
         --help|-h|help)
             echo "Usage: hermes-pgwiz [command]"
@@ -606,7 +718,8 @@ main() {
             echo "  logs [svc]   Tail logs (bot|api|ui|all)"
             echo "  build        Build Rust crates (release)"
             echo "  setup-env    Configure .env"
-            echo "  auto-p       Auto-detect Python env (PYTHON_BIN, WORKER_DIR)"
+            echo "  auto-p       Auto-detect Python + Node env vars (PYTHON_BIN, WORKER_DIR, NODE_BIN)"
+            echo "  setup-node   Install/upgrade Node.js LTS via nvm (required for yt-dlp, v17+)"
             echo "  --menu       Interactive menu (default)"
             echo ""
             ;;
