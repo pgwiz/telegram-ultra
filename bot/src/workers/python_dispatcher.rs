@@ -241,10 +241,10 @@ impl PythonDispatcher {
             let reader = BufReader::new(stderr);
             let mut lines = reader.lines();
             while let Ok(Some(line)) = lines.next_line().await {
-                // Forward worker logs as debug-level traces
-                debug!(target: "python_worker", "{}", line);
+                // Forward worker logs — use warn so they're visible in production
+                warn!(target: "python_worker", "{}", line);
             }
-            debug!("Worker stderr stream ended");
+            warn!("Worker stderr stream ended");
         });
 
         // Store handles
