@@ -139,6 +139,7 @@ async def _execute_download(ipc: IPCHandler, task_id: str, command: list, output
         destination_file = None
         has_error = False
         error_message = None
+        stderr_lines = []  # collect all yt-dlp output for error reporting
 
         # Read stderr for progress
         async def read_progress():
@@ -158,7 +159,8 @@ async def _execute_download(ipc: IPCHandler, task_id: str, command: list, output
                     if not line:
                         continue
 
-                    logger.debug(f"[{task_id}] yt-dlp: {line[:100]}")
+                    logger.debug(f"[{task_id}] yt-dlp: {line}")
+                    stderr_lines.append(line)
 
                     # Parse progress
                     result = progress_collector.process_line(line)
@@ -209,11 +211,21 @@ async def _execute_download(ipc: IPCHandler, task_id: str, command: list, output
         returncode = await process.wait()
 
         if returncode != 0:
+            # Always log full yt-dlp output so the real error is visible
+            if stderr_lines:
+                logger.error(f"[{task_id}] yt-dlp exited with code {returncode}. Full output:")
+                for l in stderr_lines:
+                    logger.error(f"[{task_id}]   {l}")
+            else:
+                logger.error(f"[{task_id}] yt-dlp exited with code {returncode} (no output)")
             if has_error and error_message:
                 ipc.send_error(task_id, error_message)
             else:
+                # Try to extract meaningful message from yt-dlp output
+                ytdlp_msg = next((l for l in reversed(stderr_lines) if 'ERROR' in l or 'error' in l.lower()), None)
+                if ytdlp_msg:
+                    logger.error(f"[{task_id}] yt-dlp error: {ytdlp_msg}")
                 error = get_error('UNKNOWN_ERROR')
-                logger.error(f"[{task_id}] yt-dlp exited with code {returncode}")
                 ipc.send_error(task_id, error.user_message, error.code)
             return
 
