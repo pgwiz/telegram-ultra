@@ -79,7 +79,15 @@ async def handle_youtube_download(ipc: IPCHandler, task_id: str, request: dict) 
                 command.extend(['--audio-quality', audio_quality])
         else:
             # Video format selection
-            format_str = params.get('format', 'best[ext=mp4]/best')
+            # Modern YouTube rarely provides combined streams — use merge format
+            # with cascading fallback so something always works.
+            format_str = params.get(
+                'format',
+                'bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]'
+                '/bestvideo[height<=720]+bestaudio'
+                '/bestvideo+bestaudio'
+                '/best'
+            )
             command.extend(['-f', format_str])
             # When merging separate video+audio streams, output as mp4
             if '+' in format_str:
