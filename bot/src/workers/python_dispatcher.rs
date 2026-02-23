@@ -122,9 +122,14 @@ pub struct PythonDispatcher {
 impl PythonDispatcher {
     /// Create a new dispatcher.
     pub fn new(worker_dir: PathBuf, python_bin: Option<String>) -> Self {
+        let default_python = if cfg!(target_os = "windows") {
+            "python".to_string()
+        } else {
+            "python3".to_string()
+        };
         Self {
             worker_dir,
-            python_bin: python_bin.unwrap_or_else(|| "python".to_string()),
+            python_bin: python_bin.unwrap_or(default_python),
             child: Arc::new(Mutex::new(None)),
             stdin_tx: Arc::new(Mutex::new(None)),
             pending: Arc::new(Mutex::new(HashMap::new())),
@@ -134,6 +139,8 @@ impl PythonDispatcher {
 
     /// Start the Python worker subprocess.
     pub async fn start(&self) -> Result<(), HermesError> {
+        info!("Starting Python worker: bin={:?} dir={:?}", self.python_bin, self.worker_dir);
+
         // Build augmented PATH with ffmpeg and other tool locations
         let extra_paths = discover_extra_paths();
         let current_path = std::env::var("PATH").unwrap_or_default();

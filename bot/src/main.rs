@@ -57,11 +57,10 @@ async fn main() {
 
     // Start the Python worker
     if let Err(e) = dispatcher.start().await {
-        error!("Failed to start Python worker: {}", e);
-        std::process::exit(1);
+        error!("Failed to start Python worker: {} — downloads will be unavailable until worker is fixed", e);
+    } else {
+        info!("Python worker started successfully");
     }
-
-    info!("Python worker started successfully");
 
     // Connect to shared database (for web queue polling)
     let database_path = std::env::var("DATABASE_PATH").unwrap_or_else(|_| "./hermes.db".to_string());
