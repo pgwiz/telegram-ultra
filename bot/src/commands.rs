@@ -1114,12 +1114,25 @@ async fn cmd_playlist_preview(
 
     // Detect link type
     if let Some(link) = crate::link_detector::detect_first_link(&url) {
-        if !link.is_playlist() {
-            bot.send_message(msg.chat.id, "That's not a playlist URL. Use /download for single videos.").await?;
-            return Ok(());
+        // Accept both playlists and single videos
+        match link {
+            crate::link_detector::DetectedLink::YoutubePlaylist { .. } => {
+                // Proceed with playlist preview
+            }
+            crate::link_detector::DetectedLink::YoutubeVideo { .. }
+            | crate::link_detector::DetectedLink::YoutubeShort { .. }
+            | crate::link_detector::DetectedLink::YoutubeMusic { .. } => {
+                // For single videos: treat as single-item playlist and download directly
+                // Show format selection instead of preview
+                return cmd_download(bot, msg, link.url().to_string(), state).await;
+            }
+            _ => {
+                bot.send_message(msg.chat.id, "That's not a supported YouTube link.").await?;
+                return Ok(());
+            }
         }
     } else {
-        bot.send_message(msg.chat.id, "Could not detect a valid YouTube playlist URL.").await?;
+        bot.send_message(msg.chat.id, "Could not detect a valid YouTube URL.").await?;
         return Ok(());
     }
 
