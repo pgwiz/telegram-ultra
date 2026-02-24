@@ -267,8 +267,8 @@ async def _download_playlist_tracks(ipc: IPCHandler, task_id: str, url: str, out
             safe_mkdir(os.path.dirname(archive_path))
             command.extend(['--download-archive', archive_path])
 
-        # Output template
-        output_template = os.path.join(output_dir, '%(autonumber)03d - %(title)s.%(ext)s')
+        # Output template - use playlist_index to preserve original YouTube track numbers
+        output_template = os.path.join(output_dir, '%(playlist_index)03d - %(title)s.%(ext)s')
         command.extend(['-o', output_template])
 
         # Cookies
