@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Hermes - Help</title>
+    <link rel="stylesheet" href="/assets/style.css">
+</head>
+<body>
+    <!-- Navbar -->
+    <nav class="navbar">
+        <button id="hamburgerBtn" class="navbar-hamburger" aria-label="Toggle menu">
+            <span></span><span></span><span></span>
+        </button>
+        <span class="navbar-brand">Hermes Download Nexus</span>
+        <div class="navbar-links">
+            <span class="session-expiry" id="sessionTimer"></span>
+            <a href="#" onclick="hermesLogout(); return false;">Logout</a>
+        </div>
+    </nav>
+
+    <!-- Mobile sidebar overlay -->
+    <div id="sidebarOverlay" class="sidebar-overlay"></div>
+
+    <!-- Sidebar -->
+    <aside class="sidebar" id="sidebar">
+        <ul class="sidebar-nav">
+            <li><a href="/dashboard.html">Dashboard</a></li>
+            <li><a href="/files.html">Downloads</a></li>
+            <li><a href="/scheduler.html">Scheduler</a></li>
+            <li class="sidebar-section">Reference</li>
+            <li class="active"><a href="/help.html">Help</a></li>
+            <li class="sidebar-section">Administration</li>
+            <li id="adminLink" style="display:none"><a href="/admin.html">Admin Panel</a></li>
+        </ul>
+    </aside>
+
+    <!-- Main -->
+    <main class="main-content">
+
+        <div class="card">
+            <div class="card-header">Telegram Bot Commands</div>
+            <table>
+                <thead>
+                    <tr><th>Command</th><th>Description</th></tr>
+                </thead>
+                <tbody>
+                    <tr><td><code>/download &lt;url&gt;</code></td><td>Download audio from a YouTube or Telegram URL (default)</td></tr>
+                    <tr><td><code>/dv &lt;url&gt;</code></td><td>Download video — shows quality selection buttons</td></tr>
+                    <tr><td><code>/da &lt;url&gt;</code></td><td>Download audio — shows format selection buttons</td></tr>
+                    <tr><td><code>/search &lt;query&gt;</code></td><td>Search YouTube, returns 10 clickable results. Tap a result to choose Audio or Video format.</td></tr>
+                    <tr><td><code>/status</code></td><td>Show active and recent download tasks</td></tr>
+                    <tr><td><code>/cancel &lt;id&gt;</code></td><td>Cancel a queued or running download by its short task ID</td></tr>
+                    <tr><td><code>/chatid</code></td><td>Show your Telegram Chat ID (needed to log in to this dashboard)</td></tr>
+                    <tr><td><code>/ping</code></td><td>Health check — confirms the bot is running</td></tr>
+                    <tr><td><code>/help</code></td><td>Show the command summary in Telegram</td></tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="card">
+            <div class="card-header">Admin Commands</div>
+            <table>
+                <thead>
+                    <tr><th>Command</th><th>Description</th></tr>
+                </thead>
+                <tbody>
+                    <tr><td><code>/upcook [cookies]</code></td><td>Update the cookies.txt used for age-gated or member-only content. Paste cookie text as argument, or send a cookies.txt file.</td></tr>
+                    <tr>
+                        <td><code>/allow &lt;seconds&gt;</code></td>
+                        <td>
+                            Open a time-limited OTP-free login window (max 300 seconds).
+                            During the window the <em>Quick Login</em> button appears on the login page —
+                            anyone who knows their Chat ID can log in without receiving an OTP code.
+                            Useful when you need to log in urgently without access to Telegram notifications.
+                        </td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="card">
+            <div class="card-header">How to Find Your Chat ID</div>
+            <p style="margin-bottom:12px; color:var(--stone-gray); font-size:0.9rem">
+                Your Chat ID is required to log in to this dashboard.
+            </p>
+            <ol style="padding-left:20px; line-height:1.9; font-size:0.9rem; color:var(--dark-text)">
+                <li>Open Telegram and find the <strong>Hermes</strong> bot.</li>
+                <li>Send <code>/start</code> or <code>/chatid</code>.</li>
+                <li>The bot replies with your Chat ID in a copyable monospace block.</li>
+                <li>Paste that number on the login page to request your OTP.</li>
+            </ol>
+        </div>
+
+        <div class="card">
+            <div class="card-header">Supported Sources</div>
+            <div style="display:grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap:12px; font-size:0.9rem">
+                <div style="padding:10px; background:var(--marble-light); border-radius:6px">
+                    <strong style="color:var(--aegean-dark)">YouTube</strong><br>
+                    <span style="color:var(--stone-gray); font-size:0.82rem">Videos, playlists, Radio Mix, Shorts, live replays</span>
+                </div>
+                <div style="padding:10px; background:var(--marble-light); border-radius:6px">
+                    <strong style="color:var(--aegean-dark)">Telegram</strong><br>
+                    <span style="color:var(--stone-gray); font-size:0.82rem">Forward files and media from public channels via t.me links</span>
+                </div>
+                <div style="padding:10px; background:var(--marble-light); border-radius:6px">
+                    <strong style="color:var(--aegean-dark)">Other sites</strong><br>
+                    <span style="color:var(--stone-gray); font-size:0.82rem">Any site supported by yt-dlp (SoundCloud, Vimeo, Twitter/X, etc.)</span>
+                </div>
+            </div>
+        </div>
+
+        <div class="card">
+            <div class="card-header">Audio &amp; Video Quality</div>
+            <table>
+                <thead>
+                    <tr><th>Format</th><th>Details</th></tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><strong>Audio (default)</strong></td>
+                        <td>Best available audio stream extracted to MP3. Uses <code>bestaudio[ext=m4a]/bestaudio/best</code> with VBR quality 0 (highest).</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Video</strong></td>
+                        <td>Best video up to 1080p merged with best audio, output as MP4. Falls back gracefully if merge is unavailable.</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Search results</strong></td>
+                        <td>Tap a search result → choose <em>Audio (MP3)</em> or <em>Video (MP4)</em> before download starts.</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Playlists</strong></td>
+                        <td>Up to 50 tracks downloaded in sequence. Radio Mix URLs are automatically normalised for reliability.</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="card">
+            <div class="card-header">Dashboard Pages</div>
+            <table>
+                <thead>
+                    <tr><th>Page</th><th>Description</th></tr>
+                </thead>
+                <tbody>
+                    <tr><td><a href="/dashboard.html"><strong>Dashboard</strong></a></td><td>Submit downloads from the web browser, monitor task progress with live polling.</td></tr>
+                    <tr><td><a href="/files.html"><strong>Downloads</strong></a></td><td>Browse completed downloads, download files to your browser, delete old files.</td></tr>
+                    <tr><td><a href="/scheduler.html"><strong>Scheduler</strong></a></td><td>Schedule recurring downloads (coming soon).</td></tr>
+                    <tr><td><a href="/admin.html"><strong>Admin Panel</strong></a></td><td>System stats, user management, log viewer. Admin account only.</td></tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="card">
+            <div class="card-header">Common Issues</div>
+            <table>
+                <thead>
+                    <tr><th>Problem</th><th>Solution</th></tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>"Requested format is not available"</td>
+                        <td>The video restricts certain quality levels. The bot automatically falls back to the best available format. If it still fails, try <code>/dv</code> and select a lower quality.</td>
+                    </tr>
+                    <tr>
+                        <td>Age-gated content fails</td>
+                        <td>Ask the admin to update cookies via <code>/upcook</code> with a valid YouTube session cookie.</td>
+                    </tr>
+                    <tr>
+                        <td>Playlist downloads stop partway</td>
+                        <td>Some playlist items may be unavailable. The bot uses <code>--ignore-errors</code> to skip bad items and continue.</td>
+                    </tr>
+                    <tr>
+                        <td>Login OTP not received</td>
+                        <td>Check that you started the bot first (<code>/start</code>). Ask the admin to run <code>/allow 120</code> for a quick-login window.</td>
+                    </tr>
+                    <tr>
+                        <td>Session expired</td>
+                        <td>Sessions last 10 minutes by default. Log in again. The admin can extend <code>SESSION_TTL_SECS</code> in the server configuration.</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+    </main>
+
+    <script src="/assets/app.js"></script>
+    <script>
+        hermesInit('help');
+    </script>
+</body>
+</html>

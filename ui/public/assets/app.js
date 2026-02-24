@@ -524,6 +524,9 @@ function hermesInit(page) {
         case 'scheduler':
             // Basic placeholder
             break;
+        case 'help':
+            // Static page, no data to load
+            break;
     }
 
     // Mobile sidebar toggle
