@@ -57,3 +57,5 @@ fix_commands.js
 fix_tg_forward.js
 fix_tg_batch.js
 fix_search_ui.js
+_pd.json
+_gen.js
