@@ -1055,8 +1055,41 @@ pub async fn execute_download_and_send(
                     warn!("Downloaded file not found at: {}", file_path);
                 }
 
-                // Handle playlist archives
-                if let Some(archives) = response.data.get("archives").and_then(|v| v.as_array()) {
+                // Handle playlist files - send each individually
+                if let Some(files) = response.data.get("files").and_then(|v| v.as_array()) {
+                    if !files.is_empty() {
+                        let _ = bot.send_message(chat_id, format!(
+                            "📤 Sending {} track(s)...",
+                            files.len()
+                        )).await;
+
+                        for (idx, file_info) in files.iter().enumerate() {
+                            let file_path = file_info.get("path").and_then(|v| v.as_str()).unwrap_or("");
+                            let file_name = file_info.get("name").and_then(|v| v.as_str()).unwrap_or("track");
+
+                            let fpath = std::path::PathBuf::from(file_path);
+                            if fpath.exists() {
+                                let input = teloxide::types::InputFile::file(&fpath);
+                                if let Err(e) = bot.send_audio(chat_id, input).await {
+                                    warn!("Failed to send audio {}: {}", file_name, e);
+                                    // Try as document if audio fails
+                                    let input2 = teloxide::types::InputFile::file(&fpath);
+                                    let _ = bot.send_document(chat_id, input2).await;
+                                }
+
+                                // Add delay between sends to avoid rate limiting
+                                if idx < files.len() - 1 {
+                                    tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+                                }
+                            }
+                        }
+
+                        let _ = bot.send_message(chat_id, format!(
+                            "✅ Sent all {} tracks", files.len()
+                        )).await;
+                    }
+                } else if let Some(archives) = response.data.get("archives").and_then(|v| v.as_array()) {
+                    // Fallback: handle archives if present (for backward compatibility)
                     for archive in archives {
                         let archive_path = archive.get("path").and_then(|v| v.as_str()).unwrap_or("");
                         let archive_name = archive.get("name").and_then(|v| v.as_str()).unwrap_or("archive.zip");

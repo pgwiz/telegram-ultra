@@ -137,31 +137,40 @@ async def handle_playlist_download(ipc: IPCHandler, task_id: str, request: dict)
             return
 
         logger.info(f"[{task_id}] Downloaded {len(downloaded_files)} tracks")
-        ipc.send_progress(task_id, 80, status='creating_archives')
+        ipc.send_progress(task_id, 95, status='finalizing')
 
-        # Create split archives
-        archive_max_size_mb = params.get('archive_max_size_mb', config.ARCHIVE_MAX_SIZE_MB)
-        archives = _create_split_archives(output_dir, safe_folder_name, archive_max_size_mb)
+        # Return individual files instead of archives for easier sending to Telegram
+        files = []
+        for file_path in downloaded_files:
+            try:
+                file_size = os.path.getsize(file_path)
+                files.append({
+                    'path': file_path,
+                    'name': os.path.basename(file_path),
+                    'size_mb': round(file_size / (1024 * 1024), 2)
+                })
+            except OSError as e:
+                logger.warning(f"Could not stat file {file_path}: {e}")
 
-        if not archives:
-            logger.warning(f"[{task_id}] Failed to create archives")
+        if not files:
+            logger.warning(f"[{task_id}] No files available to send")
             ipc.send_response(task_id, 'done', {
                 'playlist_name': playlist_name,
                 'total_tracks_downloaded': len(downloaded_files),
-                'archives': [],
+                'files': [],
                 'folder_path': output_dir,
-                'warning': 'Tracks downloaded but archiving failed'
+                'warning': 'Tracks downloaded but no files available'
             })
             return
 
-        logger.info(f"[{task_id}] Created {len(archives)} archive(s)")
+        logger.info(f"[{task_id}] Prepared {len(files)} file(s) for sending")
 
         ipc.send_progress(task_id, 100, status='completed')
 
         ipc.send_response(task_id, 'done', {
             'playlist_name': playlist_name,
             'total_tracks_downloaded': len(downloaded_files),
-            'archives': archives,
+            'files': files,
             'folder_path': output_dir,
         })
 
