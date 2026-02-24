@@ -45,15 +45,16 @@
                     <tr><th>Command</th><th>Description</th></tr>
                 </thead>
                 <tbody>
-                    <tr><td><code>/download &lt;url&gt;</code></td><td>Download audio from a YouTube or Telegram URL (default)</td></tr>
-                    <tr><td><code>/dv &lt;url&gt;</code></td><td>Download video — shows quality selection buttons</td></tr>
-                    <tr><td><code>/da &lt;url&gt;</code></td><td>Download audio — shows format selection buttons</td></tr>
+                    <tr><td><code>/download &lt;url&gt;</code></td><td>Download audio from a YouTube or Telegram URL (default — fast, no format selection)</td></tr>
+                    <tr><td><code>/dv &lt;url&gt;</code></td><td>Download video — choose resolution (720p, 1080p, or best available)</td></tr>
+                    <tr><td><code>/da &lt;url&gt;</code></td><td>Download audio — choose format (MP3, M4A, or best available)</td></tr>
+                    <tr><td><code>/playlist &lt;url&gt;</code></td><td>Preview & download playlists — shows first 5 tracks, choose track limit, select audio/video</td></tr>
                     <tr><td><code>/search &lt;query&gt;</code></td><td>Search YouTube, returns 10 clickable results. Tap a result to choose Audio or Video format.</td></tr>
-                    <tr><td><code>/status</code></td><td>Show active and recent download tasks</td></tr>
+                    <tr><td><code>/status</code></td><td>Show active and recent download tasks with progress</td></tr>
                     <tr><td><code>/cancel &lt;id&gt;</code></td><td>Cancel a queued or running download by its short task ID</td></tr>
                     <tr><td><code>/chatid</code></td><td>Show your Telegram Chat ID (needed to log in to this dashboard)</td></tr>
-                    <tr><td><code>/ping</code></td><td>Health check — confirms the bot is running</td></tr>
-                    <tr><td><code>/help</code></td><td>Show the command summary in Telegram</td></tr>
+                    <tr><td><code>/ping</code></td><td>Health check — confirms the bot is running and shows worker status</td></tr>
+                    <tr><td><code>/help</code></td><td>Show the command summary and this help page</td></tr>
                 </tbody>
             </table>
         </div>

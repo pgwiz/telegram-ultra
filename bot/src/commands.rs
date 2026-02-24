@@ -116,32 +116,38 @@ pub async fn handle_command(
 async fn cmd_start(bot: Bot, msg: Message) -> ResponseResult<()> {
     let chat_id = msg.chat.id.0;
     let help_text = "\
-Hermes Download Bot
+🎵 Hermes Download Bot
 
-Send me a YouTube or Telegram link and I'll download it for you.
+Download audio & video from YouTube, Telegram, and more!
 
-Commands:
-/download <url> - Download audio (default)
-/dv <url> - Download video (choose quality)
-/da <url> - Download audio (choose quality)
-/search <query> - Search YouTube
-/status - Check active tasks
-/cancel <id> - Cancel a download
-/chatid - Show your Chat ID
-/ping - Health check
-/help - Show this message
+📥 Quick Start:
+Just paste a link and I'll download it for you!
+Multiple links? I'll batch download them all.
 
-Telegram: Paste t.me links to forward files from channels.
-Multiple links = batch forward.
+🎬 Download Commands:
+/download <url> — Download audio (default)
+/dv <url> — Download video — choose resolution
+/da <url> — Download audio — choose format
+/playlist <url> — Preview & download playlists
 
-Admin:
-/upcook [cookies] - Update cookies.txt
-/allow <secs> - Open OTP-free login window (max 300s)
+🔍 Search & Browse:
+/search <query> — Search YouTube (10 results)
 
-You can also just paste a link directly!";
+📊 Manage Downloads:
+/status — Show active & recent tasks
+/cancel <id> — Cancel a download
+
+ℹ️ Utilities:
+/chatid — Show your Chat ID
+/ping — Health check
+/help — Show this message
+
+💡 Telegram Forwarding:
+Paste t.me links to forward files from channels.
+Send multiple links for batch operations.";
     bot.send_message(msg.chat.id, help_text).await?;
     // Chat ID in monospace so the user can easily copy it
-    bot.send_message(msg.chat.id, format!("Your Chat ID: `{}`", chat_id))
+    bot.send_message(msg.chat.id, format!("🔐 Your Chat ID: `{}`", chat_id))
         .parse_mode(ParseMode::MarkdownV2)
         .await?;
     Ok(())
@@ -155,7 +161,10 @@ async fn cmd_help(bot: Bot, msg: Message) -> ResponseResult<()> {
 /// /chatid - Send the user their Telegram Chat ID
 async fn cmd_chatid(bot: Bot, msg: Message) -> ResponseResult<()> {
     let chat_id = msg.chat.id.0;
-    bot.send_message(msg.chat.id, format!("Your Chat ID: `{}`", chat_id))
+    bot.send_message(msg.chat.id, format!(
+        "🔐 *Your Chat ID*\n\n`{}`\n\n_Copy this ID to log in to the web dashboard_",
+        chat_id
+    ))
         .parse_mode(ParseMode::MarkdownV2)
         .await?;
     Ok(())
@@ -170,18 +179,21 @@ async fn cmd_allow(
 ) -> ResponseResult<()> {
     // Admin-only
     if state.admin_chat_id != Some(msg.chat.id.0) {
-        bot.send_message(msg.chat.id, "Not authorised.").await?;
+        bot.send_message(msg.chat.id, "🔒 Access Denied\n\nYou are not authorized to use this command.")
+            .await?;
         return Ok(());
     }
 
     let secs: i64 = match secs_str.trim().parse::<i64>() {
         Ok(n) if n > 0 && n <= 300 => n,
         Ok(_) => {
-            bot.send_message(msg.chat.id, "Seconds must be 1–300.").await?;
+            bot.send_message(msg.chat.id, "⚠️ Invalid Duration\n\nSeconds must be between 1 and 300.")
+                .await?;
             return Ok(());
         }
         Err(_) => {
-            bot.send_message(msg.chat.id, "Usage: /allow <seconds> (e.g. /allow 120)").await?;
+            bot.send_message(msg.chat.id, "⚠️ Invalid Input\n\nUsage: /allow <seconds>\n\nExample: /allow 120")
+                .await?;
             return Ok(());
         }
     };
@@ -191,15 +203,17 @@ async fn cmd_allow(
             Ok(_) => {
                 bot.send_message(
                     msg.chat.id,
-                    format!("Login window open for {} seconds.\nAnyone with your Chat ID can log in without OTP during this window.", secs),
+                    format!("✅ Quick Login Window Opened\n\n⏱️ Duration: {} seconds\n\n🔓 Anyone with your Chat ID can now log in without OTP.\n\n⚠️ This is for emergency access only. Use with caution.", secs),
                 ).await?;
             }
             Err(e) => {
-                bot.send_message(msg.chat.id, format!("Failed to open window: {}", e)).await?;
+                bot.send_message(msg.chat.id, format!("❌ Failed to Open Window\n\nError: {}", e))
+                    .await?;
             }
         }
     } else {
-        bot.send_message(msg.chat.id, "Database not available.").await?;
+        bot.send_message(msg.chat.id, "❌ Database unavailable")
+            .await?;
     }
 
     Ok(())
@@ -214,7 +228,9 @@ async fn cmd_download(
 ) -> ResponseResult<()> {
     let url = url.trim().to_string();
     if url.is_empty() {
-        bot.send_message(msg.chat.id, "Usage: /download <url>").await?;
+        bot.send_message(msg.chat.id, "⬇️ *Download Audio*\n\nUsage: `/download <url>`\n\nExample:\n`/download https://youtu.be/dQw4w9WgXcQ`")
+            .parse_mode(ParseMode::MarkdownV2)
+            .await?;
         return Ok(());
     }
 
@@ -227,14 +243,17 @@ async fn cmd_download(
         Some(l) if l.is_supported() => l,
         Some(_) => {
             bot.send_message(msg.chat.id,
-                "This link type is not supported yet.\n\
-                 Currently YouTube and Telegram links are supported.\n\
-                 Other link support coming soon!"
+                "❌ Unsupported Link Type\n\n\
+                 Currently supported:\n\
+                 • YouTube videos & playlists\n\
+                 • Telegram channels & groups\n\
+                 • yt-dlp compatible sites\n\n\
+                 Other link types coming soon!"
             ).await?;
             return Ok(());
         }
         None => {
-            bot.send_message(msg.chat.id, "Could not detect a valid YouTube URL.").await?;
+            bot.send_message(msg.chat.id, "❌ Could not detect a valid URL. Please check and try again.").await?;
             return Ok(());
         }
     };
@@ -253,11 +272,12 @@ async fn cmd_download(
     }
 
     // Send initial feedback
-    let kind = if is_playlist { "playlist" } else { "download" };
+    let status_icon = if is_playlist { "📋" } else { "⏳" };
     let status_msg = bot.send_message(chat_id, format!(
-        "Queued {} [{}]\n{}",
-        kind, short_id, link.url()
-    )).await?;
+        "{} Task Queued [{}]\n\nSource:\n{}",
+        status_icon, short_id, link.url()
+    ))
+        .await?;
     let status_msg_id = status_msg.id;
 
     // Build IPC request
@@ -270,14 +290,14 @@ async fn cmd_download(
 
     // Spawn download in background so the teloxide handler returns immediately.
     // This prevents blocking all other commands for this chat during the download.
-    let kind = kind.to_string();
+    let task_kind = if is_playlist { "playlist" } else { "download" };
     tokio::spawn(async move {
         let _ = execute_download_and_send(
             &bot,
             chat_id,
             status_msg_id,
             &short_id,
-            &kind,
+            task_kind,
             &task_id,
             &request,
             DownloadMode::Audio,
@@ -1141,7 +1161,9 @@ async fn cmd_playlist_preview(
 
     let url = url.trim().to_string();
     if url.is_empty() {
-        bot.send_message(msg.chat.id, "Usage: /playlist <playlist-url>").await?;
+        bot.send_message(msg.chat.id, "🎵 *Download Playlist*\n\nUsage: `/playlist <url>`\n\nI'll show you a preview of the first few tracks, then you can choose:\n• How many tracks to download\n• Audio or video format\n\nExample:\n`/playlist https://www.youtube.com/playlist?list=...`")
+            .parse_mode(ParseMode::MarkdownV2)
+            .await?;
         return Ok(());
     }
 
@@ -1160,12 +1182,12 @@ async fn cmd_playlist_preview(
                 return cmd_download(bot, msg, link.url().to_string(), state).await;
             }
             _ => {
-                bot.send_message(msg.chat.id, "That's not a supported YouTube link.").await?;
+                bot.send_message(msg.chat.id, "❌ This is not a supported YouTube link.\n\n✓ Playlists\n✓ Videos\n✓ Shorts\n\nPlease check the URL and try again.").await?;
                 return Ok(());
             }
         }
     } else {
-        bot.send_message(msg.chat.id, "Could not detect a valid YouTube URL.").await?;
+        bot.send_message(msg.chat.id, "❌ Could not detect a valid URL. Please check and try again.").await?;
         return Ok(());
     }
 
@@ -1264,7 +1286,9 @@ async fn cmd_search(
 ) -> ResponseResult<()> {
     let query = query.trim().to_string();
     if query.is_empty() {
-        bot.send_message(msg.chat.id, "Usage: /search <query>").await?;
+        bot.send_message(msg.chat.id, "🔍 *Search YouTube*\n\nUsage: `/search <query>`\n\nExample:\n`/search billie eilish`")
+            .parse_mode(ParseMode::MarkdownV2)
+            .await?;
         return Ok(());
     }
 
@@ -1272,16 +1296,20 @@ async fn cmd_search(
     let request = search_request(&task_id, &query, 10);
 
     let searching_msg = bot.send_message(msg.chat.id, format!(
-        "Searching: \"{}\"...", query
-    )).await?;
+        "🔍 Searching for: {}\n⏳ Please wait...",
+        query
+    ))
+        .await?;
 
     match state.dispatcher.send_and_wait(&request, 30).await {
         Ok(response) => {
             if response.is_error() {
                 let err = response.error_message().unwrap_or_else(|| "Search failed".into());
                 bot.edit_message_text(msg.chat.id, searching_msg.id, format!(
-                    "Search error: {}", err
-                )).await?;
+                    "❌ *Search Error*\n\n{}", err
+                ))
+                    .parse_mode(ParseMode::MarkdownV2)
+                    .await?;
             } else {
                 let results = response.data.get("results")
                     .and_then(|v| v.as_array())
@@ -1290,7 +1318,7 @@ async fn cmd_search(
 
                 if results.is_empty() {
                     bot.edit_message_text(msg.chat.id, searching_msg.id,
-                        format!("No results found for \"{}\".", query)
+                        format!("😕 No results found for \"{}\"", query)
                     ).await?;
                 } else {
                     // Build (url, title) pairs
@@ -1391,7 +1419,9 @@ async fn cmd_cancel(
 ) -> ResponseResult<()> {
     let prefix = task_id_prefix.trim().to_string();
     if prefix.is_empty() {
-        bot.send_message(msg.chat.id, "Usage: /cancel <task-id>\nUse /status to see task IDs.").await?;
+        bot.send_message(msg.chat.id, "❌ *Cancel Download*\n\nUsage: `/cancel <task-id>`\n\nGet task IDs using `/status`")
+            .parse_mode(ParseMode::MarkdownV2)
+            .await?;
         return Ok(());
     }
 
@@ -1444,15 +1474,19 @@ async fn cmd_ping(
                 .unwrap_or(0);
             let stats = state.task_queue.stats().await;
             bot.send_message(msg.chat.id, format!(
-                "Pong!\n\
-                 Worker: {}\n\
-                 Handlers: {}\n\
-                 Queue: {}/{} running",
+                "✅ *System Status*\n\n\
+                 🤖 Worker: `{}`\n\
+                 ⚙️ Handlers: `{}`\n\
+                 ⏳ Queue: `{}/{}` running\n\n✓ All systems operational",
                 version, handlers, stats.running, stats.max_concurrent
-            )).await?;
+            ))
+                .parse_mode(ParseMode::MarkdownV2)
+                .await?;
         }
         Err(e) => {
-            bot.send_message(msg.chat.id, format!("Worker offline: {}", e)).await?;
+            bot.send_message(msg.chat.id, format!("🔴 *Worker Offline*\n\nError: {}", e))
+                .parse_mode(ParseMode::MarkdownV2)
+                .await?;
         }
     }
 
@@ -1472,7 +1506,8 @@ async fn cmd_upcook(
         .unwrap_or(false);
 
     if !is_admin {
-        bot.send_message(msg.chat.id, "This command is admin-only.").await?;
+        bot.send_message(msg.chat.id, "🔒 Admin Command\n\nThis command is restricted to administrators only.")
+            .await?;
         return Ok(());
     }
 
