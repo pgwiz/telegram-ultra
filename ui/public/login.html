@@ -11,7 +11,30 @@
         <div class="login-card">
             <h1 class="login-title">Hermes Download Nexus</h1>
             <p class="login-subtitle">Authenticate via Telegram OTP</p>
+
+            <!-- Bot info section (populated by JS) -->
+            <div id="botInfoBar" hidden style="margin-bottom:12px; padding:10px 14px; background:var(--surface-dark,#1a1a1a); border-radius:8px; font-size:0.85rem; color:var(--stone-gray,#888); flex-wrap:wrap; align-items:center; gap:10px; justify-content:space-between">
+                <span id="botInfoName" style="color:var(--dark-text,#ccc)"></span>
+                <a id="botStartLink" href="#" target="_blank" rel="noopener"
+                   style="padding:5px 12px; background:var(--gold,#c9a84c); color:#000; border-radius:5px; text-decoration:none; font-size:0.8rem; font-weight:600; white-space:nowrap">
+                    Open Bot ↗
+                </a>
+            </div>
+
             <div class="login-divider"></div>
+
+            <!-- Quick-login banner (shown when /allow N window is active) -->
+            <div id="quickLoginSection" hidden style="margin-bottom:16px; padding:12px 14px; background:#1a2a1a; border:1px solid #2d5a2d; border-radius:8px; font-size:0.85rem">
+                <div style="color:#6fcf6f; font-weight:600; margin-bottom:8px">
+                    ⚡ Quick Login Active — <span id="allowCountdown">...</span>s remaining
+                </div>
+                <div class="form-group" style="margin-bottom:8px">
+                    <input type="text" id="quickChatId" class="form-input" placeholder="Your Chat ID" inputmode="numeric" autocomplete="off" style="margin-bottom:0">
+                </div>
+                <button class="btn btn-gold" style="width:100%; padding:8px" onclick="quickLogin()">
+                    Login Without OTP
+                </button>
+            </div>
 
             <div id="loginError" class="login-error"></div>
             <div id="loginSuccess" class="login-success"></div>
@@ -166,6 +189,81 @@
         document.getElementById('otpCode').addEventListener('keydown', function(e) {
             if (e.key === 'Enter') verifyOtp();
         });
+
+        // Fetch and display bot info
+        (async () => {
+            try {
+                const resp = await fetch('/api/bot-info');
+                if (!resp.ok) return;
+                const data = await resp.json();
+                if (data.username) {
+                    document.getElementById('botInfoName').textContent =
+                        `${data.first_name} (@${data.username})`;
+                    document.getElementById('botStartLink').href =
+                        `https://t.me/${data.username}`;
+                    const bar = document.getElementById('botInfoBar');
+                    bar.removeAttribute('hidden');
+                    bar.style.display = 'flex';
+                }
+            } catch (_) { /* silently skip if bot info unavailable */ }
+        })();
+
+        // Check allow window status and start countdown if active
+        let allowTimer = null;
+        async function checkAllowStatus() {
+            try {
+                const resp = await fetch('/api/auth/allow-status');
+                if (!resp.ok) return;
+                const data = await resp.json();
+                const section = document.getElementById('quickLoginSection');
+                if (data.active && data.remaining_secs > 0) {
+                    section.removeAttribute('hidden');
+                    section.style.display = 'block';
+                    let secs = data.remaining_secs;
+                    document.getElementById('allowCountdown').textContent = secs;
+                    clearInterval(allowTimer);
+                    allowTimer = setInterval(() => {
+                        secs--;
+                        if (secs <= 0) {
+                            clearInterval(allowTimer);
+                            section.setAttribute('hidden', '');
+                        } else {
+                            document.getElementById('allowCountdown').textContent = secs;
+                        }
+                    }, 1000);
+                }
+            } catch (_) { /* silently skip */ }
+        }
+        checkAllowStatus();
+
+        async function quickLogin() {
+            hideMessages();
+            const chatId = (document.getElementById('quickChatId').value ||
+                            document.getElementById('chatId').value).trim();
+            if (!chatId || isNaN(chatId)) {
+                showError('Please enter your Chat ID.');
+                return;
+            }
+            try {
+                const resp = await fetch('/api/auth/quick-login', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ chat_id: parseInt(chatId) })
+                });
+                const data = await resp.json();
+                if (resp.ok) {
+                    localStorage.setItem('hermes_token', data.token);
+                    localStorage.setItem('hermes_chat_id', data.chat_id);
+                    localStorage.setItem('hermes_expires_in', data.expires_in);
+                    localStorage.setItem('hermes_login_time', Date.now().toString());
+                    window.location.href = '/dashboard.html';
+                } else {
+                    showError(data.message || 'Quick login failed.');
+                }
+            } catch (e) {
+                showError('Network error.');
+            }
+        }
     </script>
 </body>
 </html>

@@ -60,6 +60,8 @@ pub enum Command {
     Upcook(String),
     #[command(description = "Show your Telegram Chat ID")]
     Chatid,
+    #[command(description = "Open OTP-free login window for N seconds (admin, max 300)")]
+    Allow(String),
 }
 
 /// Shared application state passed to handlers.
@@ -100,6 +102,7 @@ pub async fn handle_command(
         Command::Ping => cmd_ping(bot, msg, state).await,
         Command::Upcook(content) => cmd_upcook(bot, msg, content, state).await,
         Command::Chatid => cmd_chatid(bot, msg).await,
+        Command::Allow(secs_str) => cmd_allow(bot, msg, secs_str, state).await,
     }
 }
 
@@ -127,6 +130,7 @@ Multiple links = batch forward.
 
 Admin:
 /upcook [cookies] - Update cookies.txt
+/allow <secs> - Open OTP-free login window (max 300s)
 
 You can also just paste a link directly!";
     bot.send_message(msg.chat.id, help_text).await?;
@@ -148,6 +152,50 @@ async fn cmd_chatid(bot: Bot, msg: Message) -> ResponseResult<()> {
     bot.send_message(msg.chat.id, format!("Your Chat ID: `{}`", chat_id))
         .parse_mode(ParseMode::MarkdownV2)
         .await?;
+    Ok(())
+}
+
+/// /allow N - Open an OTP-free login window for N seconds (admin only, max 300)
+async fn cmd_allow(
+    bot: Bot,
+    msg: Message,
+    secs_str: String,
+    state: Arc<AppState>,
+) -> ResponseResult<()> {
+    // Admin-only
+    if state.admin_chat_id != Some(msg.chat.id.0) {
+        bot.send_message(msg.chat.id, "Not authorised.").await?;
+        return Ok(());
+    }
+
+    let secs: i64 = match secs_str.trim().parse::<i64>() {
+        Ok(n) if n > 0 && n <= 300 => n,
+        Ok(_) => {
+            bot.send_message(msg.chat.id, "Seconds must be 1–300.").await?;
+            return Ok(());
+        }
+        Err(_) => {
+            bot.send_message(msg.chat.id, "Usage: /allow <seconds> (e.g. /allow 120)").await?;
+            return Ok(());
+        }
+    };
+
+    if let Some(pool) = &state.db_pool {
+        match hermes_shared::db::set_allow_window(pool, secs).await {
+            Ok(_) => {
+                bot.send_message(
+                    msg.chat.id,
+                    format!("Login window open for {} seconds.\nAnyone with your Chat ID can log in without OTP during this window.", secs),
+                ).await?;
+            }
+            Err(e) => {
+                bot.send_message(msg.chat.id, format!("Failed to open window: {}", e)).await?;
+            }
+        }
+    } else {
+        bot.send_message(msg.chat.id, "Database not available.").await?;
+    }
+
     Ok(())
 }
 

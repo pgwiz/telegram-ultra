@@ -108,6 +108,9 @@ async fn main() -> anyhow::Result<()> {
         // Auth routes (no auth required)
         .route("/api/auth/request-otp", post(routes::request_otp))
         .route("/api/auth/verify-otp", post(routes::verify_otp))
+        .route("/api/auth/allow-status", get(routes::allow_status))
+        .route("/api/auth/quick-login", post(routes::quick_login))
+        .route("/api/bot-info", get(routes::bot_info))
         // Auth-protected routes
         .route("/api/auth/logout", delete(routes::logout))
         .route("/api/download", post(routes::submit_download))

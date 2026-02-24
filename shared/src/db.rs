@@ -589,3 +589,32 @@ pub async fn delete_task(pool: &SqlitePool, task_id: &str) -> Result<()> {
 
     Ok(())
 }
+
+// ====== ALLOW WINDOW ======
+
+/// Open a time-limited OTP-free login window (admin feature).
+pub async fn set_allow_window(pool: &SqlitePool, ttl_secs: i64) -> Result<()> {
+    sqlx::query("DELETE FROM sessions WHERE token = 'allow_window'")
+        .execute(pool)
+        .await?;
+    sqlx::query(
+        "INSERT INTO sessions (token, chat_id, expires_at) \
+         VALUES ('allow_window', 0, datetime('now', '+' || ? || ' seconds'))",
+    )
+    .bind(ttl_secs)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// Returns seconds remaining in the allow window, or None if expired / never set.
+pub async fn get_allow_window_remaining(pool: &SqlitePool) -> Result<Option<i64>> {
+    let row: Option<(i64,)> = sqlx::query_as(
+        "SELECT CAST((julianday(expires_at) - julianday('now')) * 86400 AS INTEGER) \
+         FROM sessions \
+         WHERE token = 'allow_window' AND expires_at > datetime('now')",
+    )
+    .fetch_optional(pool)
+    .await?;
+    Ok(row.map(|r| r.0))
+}

@@ -33,6 +33,12 @@ pub struct MessageResponse {
 }
 
 #[derive(Serialize)]
+pub struct BotInfoResponse {
+    pub username: String,
+    pub first_name: String,
+}
+
+#[derive(Serialize)]
 pub struct AuthResponse {
     pub token: String,
     pub expires_in: i64,
@@ -240,6 +246,80 @@ pub async fn logout(
             message: "Logged out".to_string(),
         }),
     )
+}
+
+/// GET /api/bot-info - Public endpoint returning bot username and display name
+pub async fn bot_info(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<BotInfoResponse>, (StatusCode, Json<MessageResponse>)> {
+    let url = format!("https://api.telegram.org/bot{}/getMe", state.bot_token);
+
+    let client = reqwest::Client::new();
+    let resp = client.get(&url).send().await.map_err(|e| (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        Json(MessageResponse { message: format!("Telegram API unreachable: {}", e) }),
+    ))?;
+
+    let json: serde_json::Value = resp.json().await.map_err(|e| (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        Json(MessageResponse { message: e.to_string() }),
+    ))?;
+
+    let result = &json["result"];
+    Ok(Json(BotInfoResponse {
+        username:   result["username"].as_str().unwrap_or("").to_string(),
+        first_name: result["first_name"].as_str().unwrap_or("Hermes Bot").to_string(),
+    }))
+}
+
+/// GET /api/auth/allow-status — public, returns whether an OTP-free login window is active
+pub async fn allow_status(
+    State(state): State<Arc<AppState>>,
+) -> Json<serde_json::Value> {
+    match hermes_shared::db::get_allow_window_remaining(&state.pool).await {
+        Ok(Some(secs)) => Json(serde_json::json!({ "active": true, "remaining_secs": secs })),
+        _ => Json(serde_json::json!({ "active": false, "remaining_secs": 0 })),
+    }
+}
+
+#[derive(Deserialize)]
+pub struct QuickLoginBody {
+    pub chat_id: i64,
+}
+
+/// POST /api/auth/quick-login — OTP-free login during an active allow window
+pub async fn quick_login(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<QuickLoginBody>,
+) -> Result<(StatusCode, Json<AuthResponse>), (StatusCode, Json<MessageResponse>)> {
+    let remaining = hermes_shared::db::get_allow_window_remaining(&state.pool)
+        .await
+        .unwrap_or(None);
+
+    if remaining.is_none() {
+        return Err((
+            StatusCode::FORBIDDEN,
+            Json(MessageResponse { message: "No active login window.".to_string() }),
+        ));
+    }
+
+    let chat_id = body.chat_id;
+    let _ = hermes_shared::db::upsert_user(&state.pool, chat_id, None).await;
+
+    let token = auth::create_jwt(chat_id, &state.jwt_secret, state.session_ttl)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(MessageResponse { message: e })))?;
+
+    hermes_shared::db::create_jwt_session(&state.pool, chat_id, &token, state.session_ttl)
+        .await
+        .map_err(|e| (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(MessageResponse { message: e.to_string() }),
+        ))?;
+
+    Ok((
+        StatusCode::OK,
+        Json(AuthResponse { token, expires_in: state.session_ttl, chat_id }),
+    ))
 }
 
 // ====== DOWNLOAD ROUTE ======
