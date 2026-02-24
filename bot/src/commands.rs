@@ -16,9 +16,11 @@ use sqlx::SqlitePool;
 use crate::workers::python_dispatcher::PythonDispatcher;
 use crate::callback_state::{
     CallbackStateStore, SearchStateStore, SearchPending, SearchResultItem,
+    PlaylistStateStore, PlaylistPending,
     DownloadMode, FormatOption, PendingSelection,
     decode_callback, encode_callback, encode_cancel, parse_format_options,
     encode_search_callback, encode_search_format_callback,
+    encode_playlist_confirm, encode_playlist_limit, encode_playlist_format,
 };
 use crate::link_detector;
 use crate::link_detector::DetectedLink;
@@ -71,6 +73,7 @@ pub struct AppState {
     pub download_dir: String,
     pub callback_store: CallbackStateStore,
     pub search_store: SearchStateStore,
+    pub playlist_store: PlaylistStateStore,
     pub db_pool: Option<SqlitePool>,
     pub admin_chat_id: Option<i64>,
 }
@@ -620,7 +623,7 @@ pub async fn handle_callback_query(
         // Edit the format-choice message to show download status
         let _ = bot.edit_message_text(chat_id, msg_id,
             format!("Queued [{}] ({}) — {}", short_id, mode_label, url)
-        ).reply_markup(InlineKeyboardMarkup::new(vec![])).await;
+        ).reply_markup(InlineKeyboardMarkup::new(Vec::<Vec<InlineKeyboardButton>>::new())).await;
 
         let out_dir  = task_output_dir(&state.download_dir, chat_id.0, &task_id);
         let dl_mode  = if is_audio { DownloadMode::Audio } else { DownloadMode::Video };
@@ -638,6 +641,145 @@ pub async fn handle_callback_query(
                 &request,
                 dl_mode,
                 &state2,
+            ).await;
+        });
+        return Ok(());
+    }
+
+    // Handle playlist confirm (pc:KEY:[p/s/x]) — before decode_callback
+    if data.starts_with("pc:") {
+        let _ = bot.answer_callback_query(&q.id).await;
+        let parts: Vec<&str> = data.splitn(3, ':').collect();
+        let pc_key    = parts.get(1).copied().unwrap_or("");
+        let pc_choice = parts.get(2).copied().unwrap_or("x");
+
+        let pending = match state.playlist_store.get(pc_key).await {
+            Some(p) => p,
+            None    => return Ok(()),
+        };
+        let chat_id = ChatId(pending.chat_id);
+        let msg_id  = pending.message_id;
+
+        if pc_choice == "x" {
+            state.playlist_store.take(pc_key).await;
+            let _ = bot.edit_message_text(chat_id, msg_id, "Cancelled.").await;
+            return Ok(());
+        }
+        if pc_choice == "s" {
+            state.playlist_store.set_single(pc_key, true).await;
+            let buttons = vec![vec![
+                InlineKeyboardButton::callback("🎵 Audio (MP3)", encode_playlist_format(pc_key, true)),
+                InlineKeyboardButton::callback("🎬 Video (MP4)", encode_playlist_format(pc_key, false)),
+            ]];
+            let _ = bot.edit_message_text(chat_id, msg_id, "Choose format for this video:")
+                .reply_markup(InlineKeyboardMarkup::new(buttons))
+                .await;
+            return Ok(());
+        }
+        // pc_choice == "p" — show limit selection
+        state.playlist_store.set_single(pc_key, false).await;
+        let buttons = vec![
+            vec![
+                InlineKeyboardButton::callback("10 tracks",  encode_playlist_limit(pc_key, 10)),
+                InlineKeyboardButton::callback("25 tracks",  encode_playlist_limit(pc_key, 25)),
+            ],
+            vec![
+                InlineKeyboardButton::callback("50 tracks",  encode_playlist_limit(pc_key, 50)),
+                InlineKeyboardButton::callback("All tracks", encode_playlist_limit(pc_key, 0)),
+            ],
+        ];
+        let _ = bot.edit_message_text(chat_id, msg_id, "How many tracks to download?")
+            .reply_markup(InlineKeyboardMarkup::new(buttons))
+            .await;
+        return Ok(());
+    }
+
+    // Handle playlist limit (pl:KEY:N) — before decode_callback
+    if data.starts_with("pl:") {
+        let _ = bot.answer_callback_query(&q.id).await;
+        let parts: Vec<&str> = data.splitn(3, ':').collect();
+        let pl_key    = parts.get(1).copied().unwrap_or("");
+        let pl_limit: u32 = parts.get(2).and_then(|s| s.parse().ok()).unwrap_or(0);
+
+        let limit_opt = if pl_limit == 0 { None } else { Some(pl_limit) };
+        state.playlist_store.set_limit(pl_key, limit_opt).await;
+
+        let pending = match state.playlist_store.get(pl_key).await {
+            Some(p) => p,
+            None    => return Ok(()),
+        };
+        let chat_id = ChatId(pending.chat_id);
+        let msg_id  = pending.message_id;
+        let limit_label = if pl_limit == 0 {
+            "all tracks".to_string()
+        } else {
+            format!("up to {} tracks", pl_limit)
+        };
+
+        let buttons = vec![vec![
+            InlineKeyboardButton::callback("🎵 Audio (MP3)", encode_playlist_format(pl_key, true)),
+            InlineKeyboardButton::callback("🎬 Video (MP4)", encode_playlist_format(pl_key, false)),
+        ]];
+        let _ = bot.edit_message_text(chat_id, msg_id,
+            format!("Downloading {} — choose format:", limit_label)
+        )
+        .reply_markup(InlineKeyboardMarkup::new(buttons))
+        .await;
+        return Ok(());
+    }
+
+    // Handle playlist format (pf:KEY:[a/v]) — before decode_callback
+    if data.starts_with("pf:") {
+        let _ = bot.answer_callback_query(&q.id).await;
+        let parts: Vec<&str> = data.splitn(3, ':').collect();
+        let pf_key      = parts.get(1).copied().unwrap_or("");
+        let pf_is_audio = parts.get(2).copied().unwrap_or("a") == "a";
+
+        let pending = match state.playlist_store.take(pf_key).await {
+            Some(p) => p,
+            None    => return Ok(()),
+        };
+
+        let chat_id    = ChatId(pending.chat_id);
+        let msg_id     = pending.message_id;
+        let task_id    = Uuid::new_v4().to_string();
+        let short_id   = task_id[..8].to_string();
+        let out_dir    = task_output_dir(&state.download_dir, pending.chat_id, &task_id);
+        let mode_label = if pf_is_audio { "audio" } else { "video" };
+        let is_single  = pending.is_single;
+
+        let (url, ipc_action, request) = if is_single {
+            let single_url = extract_single_video_url(&pending.url);
+            let req = download_request(&task_id, &single_url, pf_is_audio, &out_dir);
+            (single_url, "youtube_dl", req)
+        } else {
+            let req = playlist_request_opts(
+                &task_id, &pending.url, &out_dir, pending.limit, pf_is_audio,
+            );
+            (pending.url.clone(), "playlist", req)
+        };
+
+        state.task_queue.enqueue(&task_id, pending.chat_id, ipc_action).await;
+
+        if let Some(pool) = &state.db_pool {
+            let db_kind = if is_single { "youtube_dl" } else { "playlist" };
+            let _ = hermes_shared::db::create_task(
+                pool, &task_id, pending.chat_id, db_kind, &url, Some(mode_label),
+            ).await;
+        }
+
+        let dl_mode    = if pf_is_audio { DownloadMode::Audio } else { DownloadMode::Video };
+        let kind_label = if is_single { "video" } else { "playlist" };
+
+        let _ = bot.edit_message_text(chat_id, msg_id,
+            format!("Queued {} [{}]", kind_label, short_id)
+        ).reply_markup(InlineKeyboardMarkup::new(Vec::<Vec<InlineKeyboardButton>>::new())).await;
+
+        let state2 = state.clone();
+        tokio::spawn(async move {
+            let _ = execute_download_and_send(
+                &bot, chat_id, msg_id, &short_id,
+                kind_label, &task_id, &request, dl_mode, &state2,
             ).await;
         });
         return Ok(());
@@ -1218,6 +1360,73 @@ async fn cmd_upcook(
     Ok(())
 }
 
+/// Show playlist confirmation dialog — prompts user for playlist vs single video.
+async fn cmd_playlist_confirm(
+    bot: Bot,
+    msg: Message,
+    url: String,
+    state: Arc<AppState>,
+) -> ResponseResult<()> {
+    let chat_id = msg.chat.id;
+    let task_id = Uuid::new_v4().to_string();
+    let key     = task_id[..8].to_string();
+
+    let display_url = if url.len() > 60 {
+        format!("{}\u{2026}", &url[..59])
+    } else {
+        url.clone()
+    };
+
+    let buttons = vec![
+        vec![
+            InlineKeyboardButton::callback("🎵 Download Playlist", encode_playlist_confirm(&key, 'p')),
+            InlineKeyboardButton::callback("🎬 Single Video",      encode_playlist_confirm(&key, 's')),
+        ],
+        vec![
+            InlineKeyboardButton::callback("✖ Cancel", encode_playlist_confirm(&key, 'x')),
+        ],
+    ];
+
+    let sent = bot.send_message(chat_id, format!(
+        "Playlist detected!\n{}\n\nDownload the full playlist or just this video?",
+        display_url
+    ))
+    .reply_markup(InlineKeyboardMarkup::new(buttons))
+    .await?;
+
+    let pending = PlaylistPending {
+        url,
+        chat_id:    chat_id.0,
+        message_id: sent.id,
+        limit:      None,
+        is_single:  false,
+        created_at: std::time::Instant::now(),
+    };
+    state.playlist_store.store(key, pending).await;
+    Ok(())
+}
+
+/// Strip list= and related params from a YouTube URL to return a single-video URL.
+fn extract_single_video_url(url: &str) -> String {
+    // Handle https://www.youtube.com/watch?v=VIDEO_ID&list=PL...
+    if let Some(v_pos) = url.find("v=") {
+        let after = &url[v_pos + 2..];
+        let id_end = after.find('&').unwrap_or(after.len());
+        let video_id = &after[..id_end];
+        if video_id.len() == 11 {
+            return format!("https://www.youtube.com/watch?v={}", video_id);
+        }
+    }
+    // Handle https://youtu.be/VIDEO_ID?list=...  — strip query string
+    if url.contains("youtu.be/") {
+        if let Some(q_pos) = url.find('?') {
+            return url[..q_pos].to_string();
+        }
+    }
+    url.to_string()
+}
+
+/// Show playlist confirmation dialog — prompts user for playlist vs single video.
 /// Handle plain messages (auto-detect links).
 pub async fn handle_message(
     bot: Bot,
@@ -1240,9 +1449,12 @@ pub async fn handle_message(
                 info!("Auto-detected {} Telegram link(s)", links.len());
                 cmd_telegram_forward(bot, msg, links, state).await?;
             } else if first.is_supported() {
-                // YouTube links: download first one
                 info!("Auto-detected link: {:?}", first);
-                cmd_download(bot, msg, first.url().to_string(), state).await?;
+                if first.is_playlist() {
+                    cmd_playlist_confirm(bot, msg, first.url().to_string(), state).await?;
+                } else {
+                    cmd_download(bot, msg, first.url().to_string(), state).await?;
+                }
             } else {
                 info!("Unsupported link detected: {}", first.url());
                 bot.send_message(msg.chat.id,

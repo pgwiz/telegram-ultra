@@ -189,6 +189,29 @@ pub fn playlist_request(task_id: &str, url: &str, output_dir: &str) -> IPCReques
         }))
 }
 
+/// Build a playlist download request with user-chosen options.
+/// `max_items = None` means all tracks; `extract_audio = false` means video.
+pub fn playlist_request_opts(
+    task_id: &str,
+    url: &str,
+    output_dir: &str,
+    max_items: Option<u32>,
+    extract_audio: bool,
+) -> IPCRequest {
+    let mut params = serde_json::json!({
+        "extract_audio": extract_audio,
+        "audio_format": if extract_audio { "mp3" } else { "mp4" },
+        "output_dir": output_dir,
+        "archive_max_size_mb": 100,
+    });
+    if let Some(n) = max_items {
+        params["playlist_end"] = serde_json::json!(n);
+    }
+    IPCRequest::new(task_id, IPCAction::Playlist)
+        .with_url(url)
+        .with_params(params)
+}
+
 /// Build a health check request.
 pub fn health_check_request(task_id: &str) -> IPCRequest {
     IPCRequest::new(task_id, IPCAction::HealthCheck)

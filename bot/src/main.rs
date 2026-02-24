@@ -14,7 +14,7 @@ use tracing::{info, error, warn};
 
 use hermes_shared::task_queue::TaskQueue;
 use workers::python_dispatcher::PythonDispatcher;
-use callback_state::{CallbackStateStore, SearchStateStore};
+use callback_state::{CallbackStateStore, SearchStateStore, PlaylistStateStore};
 use commands::{AppState, Command};
 
 #[tokio::main]
@@ -127,6 +127,9 @@ async fn main() {
     // Initialize search result store
     let search_store = SearchStateStore::new();
 
+    // Initialize playlist confirmation store
+    let playlist_store = PlaylistStateStore::new();
+
     // Parse admin chat ID
     let admin_chat_id = std::env::var("ADMIN_CHAT_ID").ok()
         .and_then(|s| s.parse::<i64>().ok());
@@ -138,6 +141,7 @@ async fn main() {
         download_dir: download_dir.clone(),
         callback_store: callback_store.clone(),
         search_store: search_store.clone(),
+        playlist_store: playlist_store.clone(),
         db_pool: db_pool.clone(),
         admin_chat_id,
     });
@@ -222,6 +226,22 @@ async fn main() {
         loop {
             tokio::time::sleep(std::time::Duration::from_secs(120)).await;
             cleanup_search.cleanup_expired(600).await; // 10 min TTL
+        }
+    });
+
+    let cleanup_playlist = playlist_store.clone();
+    tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(std::time::Duration::from_secs(120)).await;
+            cleanup_playlist.cleanup_expired(600).await; // 10 min TTL
+        }
+    });
+
+    let cleanup_playlist = playlist_store.clone();
+    tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(std::time::Duration::from_secs(120)).await;
+            cleanup_playlist.cleanup_expired(600).await; // 10 min TTL
         }
     });
 

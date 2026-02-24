@@ -191,3 +191,71 @@ pub fn encode_search_callback(prefix: &str, index: usize) -> String {
 pub fn encode_search_format_callback(prefix: &str, index: usize, is_audio: bool) -> String {
     format!("sf:{}:{}:{}", prefix, index, if is_audio { "a" } else { "v" })
 }
+
+/// Pending playlist download — awaiting user choice of scope, limit, and format.
+#[derive(Debug, Clone)]
+pub struct PlaylistPending {
+    pub url:        String,
+    pub chat_id:    i64,
+    pub message_id: MessageId,
+    pub limit:      Option<u32>,   // None = all tracks; Some(n) = cap at n
+    pub is_single:  bool,          // true = download only this video, not the playlist
+    pub created_at: std::time::Instant,
+}
+
+/// Thread-safe store for pending playlist confirmation dialogs.
+#[derive(Clone)]
+pub struct PlaylistStateStore {
+    inner: Arc<Mutex<HashMap<String, PlaylistPending>>>,
+}
+
+impl PlaylistStateStore {
+    pub fn new() -> Self {
+        Self { inner: Arc::new(Mutex::new(HashMap::new())) }
+    }
+
+    pub async fn store(&self, key: String, pending: PlaylistPending) {
+        self.inner.lock().await.insert(key, pending);
+    }
+
+    pub async fn get(&self, key: &str) -> Option<PlaylistPending> {
+        self.inner.lock().await.get(key).cloned()
+    }
+
+    pub async fn set_single(&self, key: &str, is_single: bool) {
+        if let Some(p) = self.inner.lock().await.get_mut(key) {
+            p.is_single = is_single;
+        }
+    }
+
+    pub async fn set_limit(&self, key: &str, limit: Option<u32>) {
+        if let Some(p) = self.inner.lock().await.get_mut(key) {
+            p.limit = limit;
+        }
+    }
+
+    pub async fn take(&self, key: &str) -> Option<PlaylistPending> {
+        self.inner.lock().await.remove(key)
+    }
+
+    pub async fn cleanup_expired(&self, ttl_secs: u64) {
+        let now = std::time::Instant::now();
+        let mut map = self.inner.lock().await;
+        map.retain(|_, v| now.duration_since(v.created_at).as_secs() < ttl_secs);
+    }
+}
+
+/// Encode playlist-confirm callback. choice: 'p'=full playlist, 's'=single video, 'x'=cancel
+pub fn encode_playlist_confirm(key: &str, choice: char) -> String {
+    format!("pc:{}:{}", key, choice)
+}
+
+/// Encode playlist-limit callback. limit: 0=all tracks, or specific count (10/25/50)
+pub fn encode_playlist_limit(key: &str, limit: u32) -> String {
+    format!("pl:{}:{}", key, limit)
+}
+
+/// Encode playlist-format callback. is_audio: true=Audio (MP3), false=Video (MP4)
+pub fn encode_playlist_format(key: &str, is_audio: bool) -> String {
+    format!("pf:{}:{}", key, if is_audio { "a" } else { "v" })
+}
