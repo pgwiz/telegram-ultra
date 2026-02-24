@@ -525,4 +525,40 @@ function hermesInit(page) {
             // Basic placeholder
             break;
     }
+
+    // Mobile sidebar toggle
+    initMobileSidebar();
+}
+
+// =============================================
+// Mobile Sidebar
+// =============================================
+
+function initMobileSidebar() {
+    const sidebar = document.getElementById('sidebar');
+    const overlay = document.getElementById('sidebarOverlay');
+    const hamburger = document.getElementById('hamburgerBtn');
+    if (!sidebar || !hamburger) return;
+
+    hamburger.addEventListener('click', () => {
+        sidebar.classList.toggle('open');
+        if (overlay) overlay.classList.toggle('visible');
+    });
+
+    if (overlay) {
+        overlay.addEventListener('click', () => {
+            sidebar.classList.remove('open');
+            overlay.classList.remove('visible');
+        });
+    }
+
+    // Close sidebar when a nav link is tapped on mobile
+    sidebar.querySelectorAll('a').forEach(a => {
+        a.addEventListener('click', () => {
+            if (window.innerWidth <= 768) {
+                sidebar.classList.remove('open');
+                if (overlay) overlay.classList.remove('visible');
+            }
+        });
+    });
 }

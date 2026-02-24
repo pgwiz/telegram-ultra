@@ -9,12 +9,18 @@
 <body>
     <!-- Navbar -->
     <nav class="navbar">
+        <button id="hamburgerBtn" class="navbar-hamburger" aria-label="Toggle menu">
+            <span></span><span></span><span></span>
+        </button>
         <span class="navbar-brand">Hermes Download Nexus</span>
         <div class="navbar-links">
             <span class="session-expiry" id="sessionTimer"></span>
             <a href="#" onclick="hermesLogout(); return false;">Logout</a>
         </div>
     </nav>
+
+    <!-- Mobile sidebar overlay -->
+    <div id="sidebarOverlay" class="sidebar-overlay"></div>
 
     <!-- Sidebar -->
     <aside class="sidebar" id="sidebar">
