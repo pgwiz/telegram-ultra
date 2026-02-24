@@ -55,7 +55,7 @@ pub async fn send_telegram_otp(
     let body = serde_json::json!({
         "chat_id": chat_id,
         "text": format!(
-            "Your Hermes Dashboard OTP code:\n\n{}\n\nThis code expires in 5 minutes.\nDo not share this code with anyone.",
+            "Your Hermes Dashboard OTP code:\n\n<code>{}</code>\n\nThis code expires in 5 minutes.\nDo not share this code with anyone.",
             otp
         ),
         "parse_mode": "HTML"

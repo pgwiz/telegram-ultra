@@ -1,9 +1,9 @@
 /// Telegram bot command handlers.
 ///
-/// Handles /start, /help, /download, /dv, /da, /search, /status, /cancel, /ping, /upcook.
+/// Handles /start, /help, /download, /dv, /da, /search, /status, /cancel, /ping, /upcook, /chatid.
 use std::sync::Arc;
 use teloxide::prelude::*;
-use teloxide::types::{CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, MessageId, Recipient};
+use teloxide::types::{CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, MessageId, ParseMode, Recipient};
 use teloxide::utils::command::BotCommands;
 use tracing::{info, error, warn};
 use uuid::Uuid;
@@ -58,6 +58,8 @@ pub enum Command {
     Ping,
     #[command(description = "Update cookies (admin)")]
     Upcook(String),
+    #[command(description = "Show your Telegram Chat ID")]
+    Chatid,
 }
 
 /// Shared application state passed to handlers.
@@ -97,12 +99,14 @@ pub async fn handle_command(
         Command::History => cmd_history(bot, msg).await,
         Command::Ping => cmd_ping(bot, msg, state).await,
         Command::Upcook(content) => cmd_upcook(bot, msg, content, state).await,
+        Command::Chatid => cmd_chatid(bot, msg).await,
     }
 }
 
 /// /start - Welcome message
 async fn cmd_start(bot: Bot, msg: Message) -> ResponseResult<()> {
-    let text = "\
+    let chat_id = msg.chat.id.0;
+    let help_text = "\
 Hermes Download Bot
 
 Send me a YouTube or Telegram link and I'll download it for you.
@@ -114,6 +118,7 @@ Commands:
 /search <query> - Search YouTube
 /status - Check active tasks
 /cancel <id> - Cancel a download
+/chatid - Show your Chat ID
 /ping - Health check
 /help - Show this message
 
@@ -124,13 +129,26 @@ Admin:
 /upcook [cookies] - Update cookies.txt
 
 You can also just paste a link directly!";
-    bot.send_message(msg.chat.id, text).await?;
+    bot.send_message(msg.chat.id, help_text).await?;
+    // Chat ID in monospace so the user can easily copy it
+    bot.send_message(msg.chat.id, format!("Your Chat ID: `{}`", chat_id))
+        .parse_mode(ParseMode::MarkdownV2)
+        .await?;
     Ok(())
 }
 
 /// /help - Show help
 async fn cmd_help(bot: Bot, msg: Message) -> ResponseResult<()> {
     cmd_start(bot, msg).await
+}
+
+/// /chatid - Send the user their Telegram Chat ID
+async fn cmd_chatid(bot: Bot, msg: Message) -> ResponseResult<()> {
+    let chat_id = msg.chat.id.0;
+    bot.send_message(msg.chat.id, format!("Your Chat ID: `{}`", chat_id))
+        .parse_mode(ParseMode::MarkdownV2)
+        .await?;
+    Ok(())
 }
 
 /// /download <url> - Download audio from URL (default behavior)
