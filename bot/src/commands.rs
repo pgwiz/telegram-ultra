@@ -48,6 +48,8 @@ pub enum Command {
     Dv(String),
     #[command(description = "Download audio (choose quality)")]
     Da(String),
+    #[command(description = "Preview and download playlist")]
+    Playlist(String),
     #[command(description = "Search YouTube")]
     Search(String),
     #[command(description = "Check task status")]
@@ -98,6 +100,7 @@ pub async fn handle_command(
         Command::Download(url) => cmd_download(bot, msg, url, state).await,
         Command::Dv(url) => cmd_download_with_quality(bot, msg, url, DownloadMode::Video, state).await,
         Command::Da(url) => cmd_download_with_quality(bot, msg, url, DownloadMode::Audio, state).await,
+        Command::Playlist(url) => cmd_playlist_preview(bot, msg, url, state).await,
         Command::Search(query) => cmd_search(bot, msg, query, state).await,
         Command::Status => cmd_status(bot, msg, state).await,
         Command::Cancel(task_id) => cmd_cancel(bot, msg, task_id, state).await,
@@ -753,8 +756,10 @@ pub async fn handle_callback_query(
             let req = download_request(&task_id, &single_url, pf_is_audio, &out_dir);
             (single_url, "youtube_dl", req)
         } else {
+            // For playlists, use archive file for deduplication
+            let archive_path = format!("{}/playlist_archive.txt", state.download_dir);
             let req = playlist_request_opts(
-                &task_id, &pending.url, &out_dir, pending.limit, pf_is_audio,
+                &task_id, &pending.url, &out_dir, pending.limit, pf_is_audio, Some(&archive_path),
             );
             (pending.url.clone(), "playlist", req)
         };
@@ -1089,6 +1094,118 @@ pub async fn execute_download_and_send(
 
     // Cleanup
     state.dispatcher.remove_pending(task_id).await;
+    Ok(())
+}
+
+/// /playlist <url> - Preview and download playlist
+async fn cmd_playlist_preview(
+    bot: Bot,
+    msg: Message,
+    url: String,
+    state: Arc<AppState>,
+) -> ResponseResult<()> {
+    use hermes_shared::ipc_protocol::{playlist_preview_request, IPCResponse};
+
+    let url = url.trim().to_string();
+    if url.is_empty() {
+        bot.send_message(msg.chat.id, "Usage: /playlist <playlist-url>").await?;
+        return Ok(());
+    }
+
+    // Detect link type
+    if let Some(link) = crate::link_detector::detect_first_link(&url) {
+        if !link.is_playlist() {
+            bot.send_message(msg.chat.id, "That's not a playlist URL. Use /download for single videos.").await?;
+            return Ok(());
+        }
+    } else {
+        bot.send_message(msg.chat.id, "Could not detect a valid YouTube playlist URL.").await?;
+        return Ok(());
+    }
+
+    let task_id = uuid::Uuid::new_v4().to_string();
+    let status = bot.send_message(msg.chat.id, "🎵 Fetching playlist info...").await?;
+
+    // Send preview request
+    let req = playlist_preview_request(&task_id, &url, 5);
+    let mut rx = match state.dispatcher.send(&req).await {
+        Ok(rx) => rx,
+        Err(e) => {
+            bot.edit_message_text(msg.chat.id, status.id, format!("❌ Worker error: {}", e)).await?;
+            return Ok(());
+        }
+    };
+
+    // Wait for response (with timeout)
+    match tokio::time::timeout(std::time::Duration::from_secs(30), rx.recv()).await {
+        Ok(Some(response)) => {
+            let resp: IPCResponse = response;
+            if resp.is_error() {
+                let err_msg = resp.error_message().unwrap_or_else(|| "Unknown error".to_string());
+                bot.edit_message_text(msg.chat.id, status.id, format!("❌ Error: {}", err_msg)).await?;
+                return Ok(());
+            }
+
+            if resp.is_done() {
+                // Parse response data
+                if let Some(data) = resp.data.as_object() {
+                    let title = data.get("playlist_title")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("Playlist");
+                    let count = data.get("playlist_count")
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or(0);
+                    let empty_vec = Vec::new();
+                    let tracks = data.get("tracks")
+                        .and_then(|v| v.as_array())
+                        .unwrap_or(&empty_vec);
+
+                    // Format message
+                    let mut msg_text = format!("🎵 **{}**\n", title);
+                    msg_text.push_str(&format!("{} tracks total\n\n", count));
+
+                    // Show first few tracks
+                    for track in tracks.iter().take(5) {
+                        if let Some(track_obj) = track.as_object() {
+                            if let (Some(idx), Some(track_title)) = (
+                                track_obj.get("index").and_then(|v| v.as_u64()),
+                                track_obj.get("title").and_then(|v| v.as_str()),
+                            ) {
+                                msg_text.push_str(&format!("{}. {}\n", idx, track_title));
+                            }
+                        }
+                    }
+
+                    if tracks.len() > 5 {
+                        msg_text.push_str(&format!("... and {} more\n\n", count as usize - 5));
+                    } else {
+                        msg_text.push('\n');
+                    }
+
+                    msg_text.push_str(&format!("[Download Full Playlist]({})", url));
+
+                    // Update message with preview + button
+                    let keyboard = InlineKeyboardMarkup::new(vec![
+                        vec![InlineKeyboardButton::callback("⬇️ Download", format!("pl_dl:{}", url))],
+                    ]);
+
+                    bot.edit_message_text(msg.chat.id, status.id, msg_text)
+                        .parse_mode(ParseMode::MarkdownV2)
+                        .reply_markup(keyboard)
+                        .await?;
+                } else {
+                    bot.edit_message_text(msg.chat.id, status.id, "Could not parse playlist info").await?;
+                }
+            }
+        }
+        Ok(None) => {
+            bot.edit_message_text(msg.chat.id, status.id, "Worker disconnected unexpectedly").await?;
+        }
+        Err(_) => {
+            bot.edit_message_text(msg.chat.id, status.id, "Request timed out").await?;
+        }
+    }
+
     Ok(())
 }
 

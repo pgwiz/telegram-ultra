@@ -15,6 +15,7 @@ from worker.cookies import cookie_manager
 from worker.youtube_dl import handle_youtube_download
 from worker.youtube_search import handle_youtube_search, handle_get_video_info, handle_get_formats
 from worker.playlist_dl import handle_playlist_download
+from worker.playlist_utils import get_playlist_preview
 
 # Import database and cache
 from worker.database import get_database, close_database
@@ -39,6 +40,19 @@ def setup_handlers():
     ipc_handler.register('get_formats', handle_get_formats)
     ipc_handler.register('playlist', handle_playlist_download)
 
+    # Playlist preview (list first N tracks without downloading)
+    async def playlist_preview(ipc, task_id, request):
+        """Preview first N tracks of a playlist."""
+        url = request.get('url')
+        preview_count = request.get('params', {}).get('preview_count', 5)
+        result = await get_playlist_preview(url, preview_count)
+        if result:
+            ipc.send_response(task_id, 'done', result)
+        else:
+            ipc.send_error(task_id, "Failed to fetch playlist preview")
+
+    ipc_handler.register('playlist_preview', playlist_preview)
+
     # Admin handlers
     async def cache_cleanup(ipc, task_id, request):
         """Cleanup expired cache entries."""
@@ -60,7 +74,7 @@ def setup_handlers():
             'worker': 'Hermes Media Worker',
             'version': '1.0.0-phase-c',
             'config': config.to_dict(),
-            'handlers': ['youtube_dl', 'youtube_search', 'get_video_info', 'get_formats', 'playlist', 'cache_cleanup', 'cache_stats', 'health_check']
+            'handlers': ['youtube_dl', 'youtube_search', 'get_video_info', 'get_formats', 'playlist', 'playlist_preview', 'cache_cleanup', 'cache_stats', 'health_check']
         })
 
     ipc_handler.register('health_check', health_check)

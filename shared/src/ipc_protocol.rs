@@ -25,6 +25,7 @@ pub enum IPCAction {
     GetVideoInfo,
     GetFormats,
     Playlist,
+    PlaylistPreview,  // Preview first N tracks without downloading
     CacheCleanup,
     CacheStats,
     HealthCheck,
@@ -197,6 +198,7 @@ pub fn playlist_request_opts(
     output_dir: &str,
     max_items: Option<u32>,
     extract_audio: bool,
+    archive_path: Option<&str>,
 ) -> IPCRequest {
     let mut params = serde_json::json!({
         "extract_audio": extract_audio,
@@ -207,9 +209,25 @@ pub fn playlist_request_opts(
     if let Some(n) = max_items {
         params["playlist_end"] = serde_json::json!(n);
     }
+    if let Some(archive) = archive_path {
+        params["archive_file"] = serde_json::json!(archive);
+    }
     IPCRequest::new(task_id, IPCAction::Playlist)
         .with_url(url)
         .with_params(params)
+}
+
+/// Build a playlist preview request (list first N tracks without downloading).
+pub fn playlist_preview_request(
+    task_id: &str,
+    url: &str,
+    preview_count: u32,
+) -> IPCRequest {
+    IPCRequest::new(task_id, IPCAction::PlaylistPreview)
+        .with_url(url)
+        .with_params(serde_json::json!({
+            "preview_count": preview_count,
+        }))
 }
 
 /// Build a health check request.

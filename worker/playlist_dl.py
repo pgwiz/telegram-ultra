@@ -23,6 +23,15 @@ from worker.progress_hooks import StreamProgressCollector
 logger = logging.getLogger(__name__)
 
 
+# Format fallback chains for yt-dlp (audio/video modes)
+AUDIO_FORMAT = "bestaudio[ext=m4a]/bestaudio[ext=webm]/bestaudio/best"
+VIDEO_FORMAT = (
+    "bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]"
+    "/bestvideo[height<=1080]+bestaudio"
+    "/best[height<=1080]/best"
+)
+
+
 def normalize_playlist_url(url: str) -> str:
     """
     Normalize YouTube playlist URLs for yt-dlp compatibility.
@@ -241,13 +250,22 @@ async def _download_playlist_tracks(ipc: IPCHandler, task_id: str, url: str, out
         if playlist_end:
             command.extend(['--playlist-end', str(playlist_end)])
 
-        # Format
-        format_str = params.get('format', 'bestaudio[ext=m4a]/bestaudio')
+        # Format selector with fallback chain
+        if extract_audio:
+            format_str = params.get('format', AUDIO_FORMAT)
+        else:
+            format_str = params.get('format', VIDEO_FORMAT)
         command.extend(['-f', format_str])
 
         # Audio extraction
         if extract_audio:
             command.extend(['-x', '--audio-format', audio_format, '--audio-quality', '0'])
+
+        # Archive file for deduplication (skip already-downloaded tracks on re-run)
+        archive_path = params.get('archive_file')
+        if archive_path:
+            safe_mkdir(os.path.dirname(archive_path))
+            command.extend(['--download-archive', archive_path])
 
         # Output template
         output_template = os.path.join(output_dir, '%(autonumber)03d - %(title)s.%(ext)s')
