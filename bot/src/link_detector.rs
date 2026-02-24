@@ -84,6 +84,14 @@ static YOUTUBE_PLAYLIST_RE: Lazy<Regex> = Lazy::new(|| {
     ).unwrap()
 });
 
+/// YouTube watch URL with playlist param (e.g., watch?v=xxx&list=RDyyy or watch?list=xxx&v=yyy).
+/// This pattern catches Radio Mix URLs: watch?v=SEED&list=RDxxx&start_radio=1
+static YOUTUBE_WATCH_WITH_PLAYLIST_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(
+        r"(?:https?://)?(?:www\.)?youtube\.com/watch\?.*list=([a-zA-Z0-9_-]+)"
+    ).unwrap()
+});
+
 static YOUTUBE_SHORT_RE: Lazy<Regex> = Lazy::new(|| {
     Regex::new(
         r"(?:https?://)?(?:www\.)?youtube\.com/shorts/([a-zA-Z0-9_-]{11})"
@@ -127,6 +135,22 @@ pub fn detect_links(text: &str) -> Vec<DetectedLink> {
             url: cap[0].to_string(),
             playlist_id: cap[1].to_string(),
         });
+    }
+
+    // Check for watch URLs with playlist parameter (Radio Mix format: watch?v=xxx&list=RDyyy)
+    // This must be checked BEFORE regular video URLs to avoid misclassification
+    for cap in YOUTUBE_WATCH_WITH_PLAYLIST_RE.captures_iter(text) {
+        let url = cap[0].to_string();
+        let playlist_id = cap[1].to_string();
+
+        // Skip if this URL was already captured as regular playlist
+        let already = links.iter().any(|l| l.url() == url);
+        if !already {
+            links.push(DetectedLink::YoutubePlaylist {
+                url,
+                playlist_id,
+            });
+        }
     }
 
     // YouTube Shorts
@@ -231,6 +255,27 @@ mod tests {
     #[test]
     fn test_playlist() {
         let links = detect_links("https://www.youtube.com/playlist?list=PLrAXtmErZgOeiKm4sgNOknGvNjby9efdf");
+        assert_eq!(links.len(), 1);
+        assert!(links[0].is_playlist());
+    }
+
+    #[test]
+    fn test_radio_mix_playlist() {
+        // Radio Mix URL with watch?v=SEED&list=RDxxx format
+        let links = detect_links("https://www.youtube.com/watch?v=EgBJmlPo8Xw&list=RDEgBJmlPo8Xw&start_radio=1");
+        assert_eq!(links.len(), 1);
+        assert!(links[0].is_playlist());
+        if let DetectedLink::YoutubePlaylist { playlist_id, .. } = &links[0] {
+            assert_eq!(playlist_id, "RDEgBJmlPo8Xw");
+        } else {
+            panic!("Expected YoutubePlaylist");
+        }
+    }
+
+    #[test]
+    fn test_watch_with_playlist_param() {
+        // Another variation: watch?list=PLxxx&v=xxx format
+        let links = detect_links("https://www.youtube.com/watch?list=PLrAXtmErZgOeiKm4sgNOknGvNjby9efdf&v=dQw4w9WgXcQ");
         assert_eq!(links.len(), 1);
         assert!(links[0].is_playlist());
     }
