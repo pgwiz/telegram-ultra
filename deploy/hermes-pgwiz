@@ -16,7 +16,8 @@
 #   hermes-pgwiz build        Build Rust crates (release)
 #   hermes-pgwiz setup-env    Create/edit .env interactively
 #   hermes-pgwiz auto-p       Auto-detect Python + Node env vars (PYTHON_BIN, WORKER_DIR, NODE_BIN)
-#   hermes-pgwiz setup-node   Install/upgrade Node.js LTS via nvm (v17+ for yt-dlp)
+#   hermes-pgwiz setup-node      Install/upgrade Node.js LTS via nvm (v17+ for yt-dlp)
+#   hermes-pgwiz setup-mtproto   Authenticate Telethon session (run once, needs MPROTO vars)
 ###############################################################################
 set -euo pipefail
 
@@ -445,6 +446,7 @@ do_install() {
     success "Installation complete!"
     echo ""
     echo -e "  Setup .env:      ${CYAN}sudo hermes-pgwiz setup-env${NC}"
+    echo -e "  MTProto setup:   ${CYAN}hermes-pgwiz setup-mtproto${NC}  (if MPROTO=true)"
     echo -e "  Start services:  ${CYAN}hermes-pgwiz start${NC}"
     echo -e "  Check status:    ${CYAN}hermes-pgwiz status${NC}"
     echo -e "  View logs:       ${CYAN}hermes-pgwiz logs${NC}"
@@ -625,6 +627,44 @@ auto_python_env() {
 }
 
 # ══════════════════════════════════════════════════════════════════════════════
+#  MTPROTO SESSION SETUP
+# ══════════════════════════════════════════════════════════════════════════════
+setup_mtproto() {
+    local envfile="$HERMES_DIR/.env"
+
+    # Need an interactive terminal for OTP prompt
+    if [[ ! -t 0 ]] && [[ -e /dev/tty ]]; then
+        setup_mtproto < /dev/tty
+        return $?
+    elif [[ ! -t 0 ]]; then
+        error "setup-mtproto requires an interactive terminal."
+        return 1
+    fi
+
+    # Source .env to read MPROTO vars
+    if [[ -f "$envfile" ]]; then
+        # shellcheck source=/dev/null
+        set -a; source "$envfile"; set +a
+    fi
+
+    local missing=()
+    [[ -z "${TELEGRAM_API_ID:-}"    ]] && missing+=("TELEGRAM_API_ID")
+    [[ -z "${TELEGRAM_API_HASH:-}"  ]] && missing+=("TELEGRAM_API_HASH")
+    [[ -z "${TELEGRAM_PHONE:-}"     ]] && missing+=("TELEGRAM_PHONE")
+    [[ -z "${STORAGE_CHANNEL_ID:-}" ]] && missing+=("STORAGE_CHANNEL_ID")
+
+    if [[ ${#missing[@]} -gt 0 ]]; then
+        error "Missing required env vars in .env: ${missing[*]}"
+        error "Set them first with: hermes-pgwiz setup-env"
+        return 1
+    fi
+
+    info "Running MTProto session setup (you will receive a Telegram OTP)..."
+    cd "$HERMES_DIR"
+    "$PYTHON_BIN" worker/setup_session.py
+}
+
+# ══════════════════════════════════════════════════════════════════════════════
 #  ALIAS INSTALLATION
 # ══════════════════════════════════════════════════════════════════════════════
 install_alias() {
@@ -706,6 +746,7 @@ main() {
         setup-env)     need_root; setup_env ;;
         auto-p)        need_root; auto_python_env ;;
         setup-node)    need_root; setup_node_lts ;;
+        setup-mtproto) setup_mtproto ;;
         --menu|menu)   interactive_menu ;;
         --help|-h|help)
             echo "Usage: hermes-pgwiz [command]"
@@ -722,6 +763,7 @@ main() {
             echo "  setup-env    Configure .env"
             echo "  auto-p       Auto-detect Python + Node env vars (PYTHON_BIN, WORKER_DIR, NODE_BIN)"
             echo "  setup-node   Install/upgrade Node.js LTS via nvm (required for yt-dlp, v17+)"
+            echo "  setup-mtproto  Authenticate Telethon session for MTProto uploads (run once)"
             echo "  --menu       Interactive menu (default)"
             echo ""
             ;;

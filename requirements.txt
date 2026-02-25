@@ -1,2 +1,4 @@
 aiosqlite>=0.19.0
 yt-dlp>=2024.01.01
+telethon>=1.36.0
+tgcrypto>=1.2.5
