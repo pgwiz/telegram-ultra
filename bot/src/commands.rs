@@ -740,17 +740,27 @@ pub async fn handle_callback_query(
 
     // Handle playlist limit (pl:KEY:N) — before decode_callback
     if data.starts_with("pl:") {
+        info!("Playlist limit callback received: {}", data);
         let _ = bot.answer_callback_query(&q.id).await;
         let parts: Vec<&str> = data.splitn(3, ':').collect();
         let pl_key    = parts.get(1).copied().unwrap_or("");
         let pl_limit: u32 = parts.get(2).and_then(|s| s.parse().ok()).unwrap_or(0);
 
+        info!("Parsed: key={}, limit={}", pl_key, pl_limit);
+
         let limit_opt = if pl_limit == 0 { None } else { Some(pl_limit) };
         state.playlist_store.set_limit(pl_key, limit_opt).await;
+        info!("Limit set in store");
 
         let pending = match state.playlist_store.get(pl_key).await {
-            Some(p) => p,
-            None    => return Ok(()),
+            Some(p) => {
+                info!("Found pending state: limit={:?}", p.limit);
+                p
+            }
+            None    => {
+                warn!("Playlist key not found in store: {}", pl_key);
+                return Ok(());
+            }
         };
         let chat_id = ChatId(pending.chat_id);
         let msg_id  = pending.message_id;
@@ -764,11 +774,16 @@ pub async fn handle_callback_query(
             InlineKeyboardButton::callback("🎵 Audio (MP3)", encode_playlist_format(pl_key, true)),
             InlineKeyboardButton::callback("🎬 Video (MP4)", encode_playlist_format(pl_key, false)),
         ]];
-        let _ = bot.edit_message_text(chat_id, msg_id,
+        let edit_result = bot.edit_message_text(chat_id, msg_id,
             format!("Downloading {} — choose format:", limit_label)
         )
         .reply_markup(InlineKeyboardMarkup::new(buttons))
         .await;
+
+        match edit_result {
+            Ok(_) => info!("Successfully updated playlist format selection message"),
+            Err(e) => error!("Failed to edit playlist limit message: {}", e),
+        }
         return Ok(());
     }
 
@@ -834,6 +849,7 @@ pub async fn handle_callback_query(
 
     // Handle playlist preview download (pl_dl:URL) — triggered from preview
     if data.starts_with("pl_dl:") {
+        info!("Playlist preview download callback received");
         let _ = bot.answer_callback_query(&q.id).await;
         let url = &data[6..]; // Extract URL after "pl_dl:"
 
@@ -842,6 +858,7 @@ pub async fn handle_callback_query(
 
         // Create a new playlist store entry
         let key = format!("{:x}", chrono::Utc::now().timestamp_millis());
+        info!("Created playlist store key: {}", key);
         state.playlist_store.store(key.clone(), PlaylistPending {
             url: url.to_string(),
             chat_id: chat_id.0,
@@ -850,21 +867,27 @@ pub async fn handle_callback_query(
             limit: Some(10), // Default to 10 tracks
             created_at: std::time::Instant::now(),
         }).await;
+        info!("Stored playlist pending with default limit=10");
 
         // Show track limit selection
         let buttons = vec![
             vec![
-                InlineKeyboardButton::callback("10 tracks",  encode_playlist_limit(&key, 10)),
-                InlineKeyboardButton::callback("25 tracks",  encode_playlist_limit(&key, 25)),
+                InlineKeyboardButton::callback("🎵 10 tracks",  encode_playlist_limit(&key, 10)),
+                InlineKeyboardButton::callback("🎵 25 tracks",  encode_playlist_limit(&key, 25)),
             ],
             vec![
-                InlineKeyboardButton::callback("50 tracks",  encode_playlist_limit(&key, 50)),
-                InlineKeyboardButton::callback("All tracks", encode_playlist_limit(&key, 0)),
+                InlineKeyboardButton::callback("🎵 50 tracks",  encode_playlist_limit(&key, 50)),
+                InlineKeyboardButton::callback("🎵 All tracks", encode_playlist_limit(&key, 0)),
             ],
         ];
-        let _ = bot.edit_message_text(chat_id, msg_id, "How many tracks to download?")
+        let edit_result = bot.edit_message_text(chat_id, msg_id, "How many tracks to download?")
             .reply_markup(InlineKeyboardMarkup::new(buttons))
             .await;
+
+        match edit_result {
+            Ok(_) => info!("Successfully showed playlist limit selection"),
+            Err(e) => error!("Failed to show playlist limit selection: {}", e),
+        }
         return Ok(());
     }
 
