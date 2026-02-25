@@ -203,10 +203,26 @@ async fn cmd_allow(
     if let Some(pool) = &state.db_pool {
         match hermes_shared::db::set_allow_window(pool, secs).await {
             Ok(_) => {
-                bot.send_message(
-                    msg.chat.id,
-                    format!("✅ Quick Login Window Opened\n\n⏱️ Duration: {} seconds\n\n🔓 Anyone with your Chat ID can now log in without OTP.\n\n⚠️ This is for emergency access only. Use with caution.", secs),
-                ).await?;
+                // Generate an auth token for quick access
+                let token = format!("{:x}", uuid::Uuid::new_v4());
+                let admin_id = state.admin_chat_id.unwrap_or(msg.chat.id.0);
+
+                // Create a JWT session for the admin
+                if let Ok(_) = hermes_shared::db::create_jwt_session(pool, admin_id, &token, secs).await {
+                    let dashboard_url = format!("https://tg-herms-bot.pgwiz.cloud/?token={}", token);
+                    bot.send_message(
+                        msg.chat.id,
+                        format!(
+                            "✅ Quick Login Window Opened\n\n⏱️ Duration: {} seconds\n\n🔓 Direct Access Link:\n{}\n\n⚠️ This is for emergency access only. Use with caution.",
+                            secs, dashboard_url
+                        ),
+                    ).await?;
+                } else {
+                    bot.send_message(
+                        msg.chat.id,
+                        format!("✅ Quick Login Window Opened\n\n⏱️ Duration: {} seconds\n\n🔓 Anyone with your Chat ID can now log in without OTP.\n\n⚠️ This is for emergency access only. Use with caution.", secs),
+                    ).await?;
+                }
             }
             Err(e) => {
                 bot.send_message(msg.chat.id, format!("❌ Failed to Open Window\n\nError: {}", e))

@@ -12,12 +12,13 @@ WHERE expires_at > datetime('now');
 DROP TABLE IF EXISTS sessions;
 
 -- Recreate sessions table with nullable chat_id
+-- Foreign key constraint is only enforced when chat_id is NOT NULL
 CREATE TABLE IF NOT EXISTS sessions (
     token TEXT PRIMARY KEY,
     chat_id INTEGER,
     expires_at TIMESTAMP NOT NULL,
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (chat_id) REFERENCES users(chat_id)
+    FOREIGN KEY (chat_id) REFERENCES users(chat_id) ON DELETE CASCADE
 );
 
 CREATE INDEX IF NOT EXISTS idx_sessions_chat_id ON sessions(chat_id);
@@ -29,3 +30,4 @@ SELECT token, chat_id, expires_at, created_at FROM sessions_backup;
 
 -- Clean up
 DROP TABLE sessions_backup;
+

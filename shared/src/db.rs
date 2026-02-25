@@ -599,7 +599,7 @@ pub async fn set_allow_window(pool: &SqlitePool, ttl_secs: i64) -> Result<()> {
         .await?;
     sqlx::query(
         "INSERT INTO sessions (token, chat_id, expires_at) \
-         VALUES ('allow_window', 0, datetime('now', '+' || ? || ' seconds'))",
+         VALUES ('allow_window', NULL, datetime('now', '+' || ? || ' seconds'))",
     )
     .bind(ttl_secs)
     .execute(pool)
