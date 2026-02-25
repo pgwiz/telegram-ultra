@@ -309,22 +309,35 @@ async fn cmd_download(
 
     // Build IPC request
     let out_dir = task_output_dir(&state.download_dir, chat_id.0, &task_id);
-    let request = if is_playlist {
-        playlist_request(&task_id, link.url(), &out_dir)
-    } else {
-        download_request(&task_id, link.url(), true, &out_dir)
-    };
+
+    if is_playlist {
+        // For playlists: Direct user to /playlist command for format selection
+        bot.send_message(chat_id, format!(
+            "📋 **This is a Playlist**\n\n\
+            Use the `/playlist` command to:\n\
+            • Preview tracks\n\
+            • Choose how many to download\n\
+            • Select audio or video format\n\n\
+            Example:\n\
+            `/playlist {}`",
+            link.url()
+        ))
+        .parse_mode(ParseMode::MarkdownV2)
+        .await?;
+        return Ok(());
+    }
+
+    let request = download_request(&task_id, link.url(), true, &out_dir);
 
     // Spawn download in background so the teloxide handler returns immediately.
     // This prevents blocking all other commands for this chat during the download.
-    let task_kind = if is_playlist { "playlist" } else { "download" };
     tokio::spawn(async move {
         let _ = execute_download_and_send(
             &bot,
             chat_id,
             status_msg_id,
             &short_id,
-            task_kind,
+            "download",
             &task_id,
             &request,
             DownloadMode::Audio,
@@ -781,15 +794,25 @@ pub async fn handle_callback_query(
             InlineKeyboardButton::callback("🎵 Audio (MP3)", encode_playlist_format(pl_key, true)),
             InlineKeyboardButton::callback("🎬 Video (MP4)", encode_playlist_format(pl_key, false)),
         ]];
-        let edit_result = bot.edit_message_text(chat_id, msg_id,
-            format!("Downloading {} — choose format:", limit_label)
-        )
-        .reply_markup(InlineKeyboardMarkup::new(buttons))
-        .await;
+        let format_msg_text = format!("Downloading {} — choose format:", limit_label);
+        let keyboard = InlineKeyboardMarkup::new(buttons);
+
+        // Try to edit the existing message
+        let edit_result = bot.edit_message_text(chat_id, msg_id, format_msg_text.clone())
+            .reply_markup(keyboard.clone())
+            .await;
 
         match edit_result {
             Ok(_) => info!("Successfully updated playlist format selection message"),
-            Err(e) => error!("Failed to edit playlist limit message: {}", e),
+            Err(e) => {
+                error!("Failed to edit playlist limit message: {}", e);
+                // Fallback: send new message instead of editing
+                let _ = bot.send_message(chat_id, format_msg_text)
+                    .reply_markup(keyboard)
+                    .await;
+                // Try to delete the old message (ignore errors)
+                let _ = bot.delete_message(chat_id, msg_id).await;
+            }
         }
         return Ok(());
     }
