@@ -1182,19 +1182,23 @@ pub async fn execute_download_and_send(
                 let path = std::path::PathBuf::from(file_path);
                 if path.exists() {
                     let file_size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
-                    let input = teloxide::types::InputFile::file(&path);
 
                     if file_size > 50 * 1024 * 1024 {
-                        // >50MB: send as document
-                        if let Err(e) = bot.send_document(chat_id, input).await {
-                            warn!("Failed to send document: {}", e);
-                            let _ = bot.send_message(chat_id, format!(
-                                "File too large for Telegram ({:.1}MB)",
-                                file_size as f64 / 1024.0 / 1024.0
-                            )).await;
-                        }
+                        // Telegram Bot API hard limit is 50MB for all upload types.
+                        // Never attempt the upload — just tell the user.
+                        let size_mb = file_size as f64 / 1024.0 / 1024.0;
+                        let hint = if mode == DownloadMode::Video {
+                            "Use /dv to pick a lower resolution."
+                        } else {
+                            "The file is too long/large for Telegram's 50MB limit."
+                        };
+                        let _ = bot.send_message(chat_id, format!(
+                            "⚠️ File too large for Telegram ({:.1}MB)\n\n{}",
+                            size_mb, hint
+                        )).await;
                     } else if mode == DownloadMode::Video {
                         // Send as video (shows inline player)
+                        let input = teloxide::types::InputFile::file(&path);
                         if let Err(e) = bot.send_video(chat_id, input).await {
                             warn!("Failed to send video, trying document: {}", e);
                             let input2 = teloxide::types::InputFile::file(&path);
@@ -1202,6 +1206,7 @@ pub async fn execute_download_and_send(
                         }
                     } else {
                         // Send as audio
+                        let input = teloxide::types::InputFile::file(&path);
                         if let Err(e) = bot.send_audio(chat_id, input).await {
                             warn!("Failed to send audio, trying document: {}", e);
                             let input2 = teloxide::types::InputFile::file(&path);
