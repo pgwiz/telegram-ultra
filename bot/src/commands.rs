@@ -290,6 +290,36 @@ async fn cmd_download(
     let chat_id = msg.chat.id;
     let is_playlist = link.is_playlist();
 
+    // Fast-path: if this URL was already downloaded and the file still exists on disk,
+    // skip yt-dlp entirely and deliver from cache.
+    if !is_playlist {
+        if let Some(pool) = &state.db_pool {
+            if let Some((prev_task_id, prev_path, ch_msg_opt)) =
+                hermes_shared::db::find_cached_download(pool, link.url()).await
+            {
+                if std::path::Path::new(&prev_path).exists() {
+                    let sm = bot.send_message(chat_id, "⚡ Already downloaded — serving from cache...").await?;
+                    let prev_filename = std::path::Path::new(&prev_path)
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or("download")
+                        .to_string();
+                    let bot2   = bot.clone();
+                    let state2 = state.clone();
+                    let sm_id  = sm.id;
+                    tokio::spawn(async move {
+                        let _ = deliver_file(
+                            &bot2, chat_id, &prev_path, &prev_filename,
+                            &prev_task_id, DownloadMode::Audio, ch_msg_opt, &state2,
+                        ).await;
+                        let _ = bot2.delete_message(chat_id, sm_id).await;
+                    });
+                    return Ok(());
+                }
+            }
+        }
+    }
+
     // Enqueue
     state.task_queue.enqueue(&task_id, chat_id.0, link.ipc_action()).await;
 
@@ -1064,6 +1094,188 @@ pub async fn handle_callback_query(
     Ok(())
 }
 
+/// Deliver a single downloaded file to the user.
+///
+/// Handles all delivery paths:
+///   - ≤ 50 MB → send directly as audio or video
+///   - > 50 MB + MPROTO=true → upload via MTProto IPC, copy_message to user
+///   - > 50 MB + MPROTO=false → generate and send 24h download link
+///
+/// `known_channel_msg_id`: if Some, skip the MTProto upload and copy_message directly
+/// (used by the dedup fast-path when the channel_msg_id is already cached in the DB).
+async fn deliver_file(
+    bot: &Bot,
+    chat_id: ChatId,
+    file_path: &str,
+    filename: &str,
+    task_id: &str,
+    mode: DownloadMode,
+    known_channel_msg_id: Option<i64>,
+    state: &AppState,
+) -> ResponseResult<()> {
+    if file_path.is_empty() {
+        return Ok(());
+    }
+    let path = std::path::PathBuf::from(file_path);
+    if !path.exists() {
+        warn!("File not found at: {}", file_path);
+        return Ok(());
+    }
+    let file_size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+
+    if file_size > 50 * 1024 * 1024 {
+        let size_mb    = file_size as f64 / 1024.0 / 1024.0;
+        let use_mproto = std::env::var("MPROTO")
+            .map(|v| v.to_lowercase() == "true")
+            .unwrap_or(false);
+
+        if use_mproto {
+            let storage_channel_id: i64 = std::env::var("STORAGE_CHANNEL_ID")
+                .ok().and_then(|v| v.parse().ok()).unwrap_or(0);
+
+            // Use cached channel_msg_id when available (avoids re-upload)
+            let (channel_msg_id, upload_status_msg) = if let Some(cached) = known_channel_msg_id {
+                (Some(cached), None::<teloxide::types::Message>)
+            } else {
+                let upload_task_id = format!("up-{}", task_id);
+                let req = hermes_shared::ipc_protocol::mtproto_upload_request(
+                    &upload_task_id, file_path, chat_id.0, filename,
+                );
+                let sm = bot.send_message(chat_id, format!(
+                    "⬆️ {:.1}MB — uploading via MTProto...", size_mb
+                )).await;
+
+                let mut ch_id: Option<i64> = None;
+                let mut last_edit = std::time::Instant::now();
+
+                if let Ok(mut rx) = state.dispatcher.send(&req).await {
+                    loop {
+                        match rx.recv().await {
+                            Some(resp) if resp.is_progress() => {
+                                if last_edit.elapsed().as_secs() >= 4 {
+                                    last_edit = std::time::Instant::now();
+                                    let pct  = resp.progress_percent().unwrap_or(0) as usize;
+                                    let spd  = resp.progress_speed().unwrap_or_default();
+                                    let done = pct / 10;
+                                    let bar  = format!("{}{}", "█".repeat(done), "░".repeat(10 - done));
+                                    if let Ok(ref m) = sm {
+                                        let _ = bot.edit_message_text(chat_id, m.id, format!(
+                                            "⬆️ Uploading via MTProto\n[{bar}] {pct}%  {spd}"
+                                        )).await;
+                                    }
+                                }
+                            }
+                            Some(resp) if resp.is_done() => {
+                                ch_id = resp.data.get("channel_msg_id").and_then(|v| v.as_i64());
+                                break;
+                            }
+                            Some(resp) if resp.is_error() => {
+                                warn!("MTProto upload IPC error for {}: {:?}", task_id, resp.error_message());
+                                break;
+                            }
+                            None => break,
+                            _ => {}
+                        }
+                    }
+                } else {
+                    warn!("Failed to send mtproto_upload IPC request for {}", task_id);
+                }
+
+                (ch_id, sm.ok())
+            };
+
+            if let (Some(msg_id), true) = (channel_msg_id, storage_channel_id != 0) {
+                let from_chat = teloxide::types::ChatId(storage_channel_id);
+                match bot.copy_message(chat_id, from_chat,
+                    teloxide::types::MessageId(msg_id as i32)).await
+                {
+                    Ok(_) => {
+                        // Persist channel_msg_id so future requests for this file skip the upload
+                        if let Some(pool) = &state.db_pool {
+                            let _ = hermes_shared::db::save_channel_msg_id(pool, task_id, msg_id).await;
+                        }
+                        if let Some(ref sm) = upload_status_msg {
+                            let _ = bot.delete_message(chat_id, sm.id).await;
+                        }
+                    }
+                    Err(e) => {
+                        warn!("copy_message failed for {}: {}", task_id, e);
+                        let err_text = "⚠️ MTProto forward failed — try again";
+                        if let Some(ref sm) = upload_status_msg {
+                            let _ = bot.edit_message_text(chat_id, sm.id, err_text).await;
+                        } else {
+                            let _ = bot.send_message(chat_id, err_text).await;
+                        }
+                    }
+                }
+            } else {
+                // Upload failed or channel not configured — fall back to 24h link
+                if let Some(pool) = &state.db_pool {
+                    let base = std::env::var("DASHBOARD_URL")
+                        .unwrap_or_else(|_| "https://tg-hermes-bot.pgwiz.cloud".to_string());
+                    if hermes_shared::db::create_file_download_token(
+                        pool, task_id, chat_id.0, 86400
+                    ).await.is_ok() {
+                        let dl_url  = format!("{}/api/dl/{}", base, task_id);
+                        let msg_txt = format!(
+                            "⚠️ MTProto upload failed.\n\n📥 Download link (24h):\n{}", dl_url
+                        );
+                        if let Some(ref sm) = upload_status_msg {
+                            let _ = bot.edit_message_text(chat_id, sm.id, msg_txt).await;
+                        } else {
+                            let _ = bot.send_message(chat_id, msg_txt).await;
+                        }
+                    }
+                }
+            }
+        } else if let Some(pool) = &state.db_pool {
+            let dashboard_url = std::env::var("DASHBOARD_URL")
+                .unwrap_or_else(|_| "https://tg-hermes-bot.pgwiz.cloud".to_string());
+            match hermes_shared::db::create_file_download_token(pool, task_id, chat_id.0, 86400).await {
+                Ok(_) => {
+                    let dl_url = format!("{}/api/dl/{}", dashboard_url, task_id);
+                    let _ = bot.send_message(chat_id, format!(
+                        "⚠️ File too large for Telegram ({:.1}MB)\n\n📥 Download link (24h):\n{}",
+                        size_mb, dl_url
+                    )).await;
+                }
+                Err(e) => {
+                    warn!("Failed to create download token for {}: {}", task_id, e);
+                    let _ = bot.send_message(chat_id, format!(
+                        "⚠️ File too large for Telegram ({:.1}MB)\nCouldn't generate download link.",
+                        size_mb
+                    )).await;
+                }
+            }
+        } else {
+            let hint = if mode == DownloadMode::Video {
+                "Use /dv to pick a lower resolution."
+            } else {
+                "The file exceeds Telegram's 50MB limit."
+            };
+            let _ = bot.send_message(chat_id, format!(
+                "⚠️ File too large for Telegram ({:.1}MB)\n\n{}",
+                size_mb, hint
+            )).await;
+        }
+    } else if mode == DownloadMode::Video {
+        let input = teloxide::types::InputFile::file(&path);
+        if let Err(e) = bot.send_video(chat_id, input).await {
+            warn!("Failed to send video, trying document: {}", e);
+            let input2 = teloxide::types::InputFile::file(&path);
+            let _ = bot.send_document(chat_id, input2).await;
+        }
+    } else {
+        let input = teloxide::types::InputFile::file(&path);
+        if let Err(e) = bot.send_audio(chat_id, input).await {
+            warn!("Failed to send audio, trying document: {}", e);
+            let input2 = teloxide::types::InputFile::file(&path);
+            let _ = bot.send_document(chat_id, input2).await;
+        }
+    }
+    Ok(())
+}
+
 /// Execute a download request, stream progress, and send the resulting file.
 /// Shared by cmd_download and handle_callback_query.
 pub async fn execute_download_and_send(
@@ -1179,162 +1391,7 @@ pub async fn execute_download_and_send(
                 )).await;
 
                 // Send the file to user
-                let path = std::path::PathBuf::from(file_path);
-                if path.exists() {
-                    let file_size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
-
-                    if file_size > 50 * 1024 * 1024 {
-                        // Telegram Bot API hard limit is 50MB for all upload types.
-                        // Either use MTProto (MPROTO=true) or generate a 24h download link.
-                        let size_mb = file_size as f64 / 1024.0 / 1024.0;
-                        let use_mproto = std::env::var("MPROTO")
-                            .map(|v| v.to_lowercase() == "true")
-                            .unwrap_or(false);
-
-                        if use_mproto {
-                            // Send the file via MTProto: upload to private storage channel,
-                            // then copy_message to the user.
-                            let upload_task_id = format!("up-{}", task_id);
-                            let req = hermes_shared::ipc_protocol::mtproto_upload_request(
-                                &upload_task_id,
-                                file_path,
-                                chat_id.0,
-                                filename,
-                            );
-
-                            let status_msg = bot.send_message(chat_id, format!(
-                                "⬆️ {:.1}MB — uploading via MTProto...", size_mb
-                            )).await;
-
-                            let upload_rx = state.dispatcher.send(&req).await;
-                            let mut channel_msg_id: Option<i64> = None;
-                            let mut last_edit = std::time::Instant::now();
-
-                            if let Ok(mut rx) = upload_rx {
-                                loop {
-                                    match rx.recv().await {
-                                        Some(resp) if resp.is_progress() => {
-                                            if last_edit.elapsed().as_secs() >= 4 {
-                                                last_edit = std::time::Instant::now();
-                                                let pct  = resp.progress_percent().unwrap_or(0) as usize;
-                                                let spd  = resp.progress_speed().unwrap_or_default();
-                                                let done = pct / 10;
-                                                let bar  = format!("{}{}", "█".repeat(done), "░".repeat(10 - done));
-                                                if let Ok(ref sm) = status_msg {
-                                                    let _ = bot.edit_message_text(chat_id, sm.id, format!(
-                                                        "⬆️ Uploading via MTProto\n[{bar}] {pct}%  {spd}"
-                                                    )).await;
-                                                }
-                                            }
-                                        }
-                                        Some(resp) if resp.is_done() => {
-                                            channel_msg_id = resp.data.get("channel_msg_id")
-                                                .and_then(|v| v.as_i64());
-                                            break;
-                                        }
-                                        Some(resp) if resp.is_error() => {
-                                            warn!("MTProto upload IPC error for {}: {:?}", task_id, resp.error_message());
-                                            break;
-                                        }
-                                        None => break,
-                                        _ => {}
-                                    }
-                                }
-                            } else {
-                                warn!("Failed to send mtproto_upload IPC request for {}", task_id);
-                            }
-
-                            let storage_channel_id: i64 = std::env::var("STORAGE_CHANNEL_ID")
-                                .ok().and_then(|v| v.parse().ok()).unwrap_or(0);
-
-                            if let (Some(msg_id), true) = (channel_msg_id, storage_channel_id != 0) {
-                                let from_chat = teloxide::types::ChatId(storage_channel_id);
-                                match bot.copy_message(chat_id, from_chat,
-                                    teloxide::types::MessageId(msg_id as i32)).await
-                                {
-                                    Ok(_) => {
-                                        if let Ok(ref sm) = status_msg {
-                                            let _ = bot.delete_message(chat_id, sm.id).await;
-                                        }
-                                    }
-                                    Err(e) => {
-                                        warn!("copy_message failed for {}: {}", task_id, e);
-                                        if let Ok(ref sm) = status_msg {
-                                            let _ = bot.edit_message_text(chat_id, sm.id,
-                                                "⚠️ MTProto forward failed — try /dl again"
-                                            ).await;
-                                        }
-                                    }
-                                }
-                            } else {
-                                // MTProto upload failed — fall back to 24h download link
-                                if let Some(pool) = &state.db_pool {
-                                    let base = std::env::var("DASHBOARD_URL")
-                                        .unwrap_or_else(|_| "https://tg-hermes-bot.pgwiz.cloud".to_string());
-                                    if hermes_shared::db::create_file_download_token(
-                                        pool, task_id, chat_id.0, 86400
-                                    ).await.is_ok() {
-                                        let dl_url = format!("{}/api/dl/{}", base, task_id);
-                                        if let Ok(ref sm) = status_msg {
-                                            let _ = bot.edit_message_text(chat_id, sm.id, format!(
-                                                "⚠️ MTProto upload failed.\n\n📥 Download link (24h):\n{}", dl_url
-                                            )).await;
-                                        }
-                                    }
-                                }
-                            }
-                        } else if let Some(pool) = &state.db_pool {
-                            // Generate a 24h download token and send a direct link
-                            let dashboard_url = std::env::var("DASHBOARD_URL")
-                                .unwrap_or_else(|_| "https://tg-hermes-bot.pgwiz.cloud".to_string());
-                            match hermes_shared::db::create_file_download_token(pool, task_id, chat_id.0, 86400).await {
-                                Ok(_) => {
-                                    let dl_url = format!("{}/api/dl/{}", dashboard_url, task_id);
-                                    let _ = bot.send_message(chat_id, format!(
-                                        "⚠️ File too large for Telegram ({:.1}MB)\n\n📥 Download link (24h):\n{}",
-                                        size_mb, dl_url
-                                    )).await;
-                                }
-                                Err(e) => {
-                                    warn!("Failed to create download token for {}: {}", task_id, e);
-                                    let _ = bot.send_message(chat_id, format!(
-                                        "⚠️ File too large for Telegram ({:.1}MB)\nCouldn't generate download link.",
-                                        size_mb
-                                    )).await;
-                                }
-                            }
-                        } else {
-                            // No DB available — fall back to a plain hint
-                            let hint = if mode == DownloadMode::Video {
-                                "Use /dv to pick a lower resolution."
-                            } else {
-                                "The file exceeds Telegram's 50MB limit."
-                            };
-                            let _ = bot.send_message(chat_id, format!(
-                                "⚠️ File too large for Telegram ({:.1}MB)\n\n{}",
-                                size_mb, hint
-                            )).await;
-                        }
-                    } else if mode == DownloadMode::Video {
-                        // Send as video (shows inline player)
-                        let input = teloxide::types::InputFile::file(&path);
-                        if let Err(e) = bot.send_video(chat_id, input).await {
-                            warn!("Failed to send video, trying document: {}", e);
-                            let input2 = teloxide::types::InputFile::file(&path);
-                            let _ = bot.send_document(chat_id, input2).await;
-                        }
-                    } else {
-                        // Send as audio
-                        let input = teloxide::types::InputFile::file(&path);
-                        if let Err(e) = bot.send_audio(chat_id, input).await {
-                            warn!("Failed to send audio, trying document: {}", e);
-                            let input2 = teloxide::types::InputFile::file(&path);
-                            let _ = bot.send_document(chat_id, input2).await;
-                        }
-                    }
-                } else if !file_path.is_empty() {
-                    warn!("Downloaded file not found at: {}", file_path);
-                }
+                deliver_file(&bot, chat_id, file_path, filename, task_id, mode, None, &state).await?;
 
                 // Handle playlist files - send each individually
                 if let Some(files) = response.data.get("files").and_then(|v| v.as_array()) {

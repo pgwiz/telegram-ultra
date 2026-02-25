@@ -120,6 +120,45 @@ pub async fn fail_task(
     Ok(())
 }
 
+/// Find the most recent completed download task for this URL that still has a file_path.
+/// Returns (task_id, file_path, channel_msg_id).
+/// Caller must verify file_path still exists on disk before using the cache.
+pub async fn find_cached_download(
+    pool: &SqlitePool,
+    url: &str,
+) -> Option<(String, String, Option<i64>)> {
+    let row = sqlx::query(
+        r#"SELECT id, file_path, channel_msg_id FROM tasks
+           WHERE url = ? AND status = 'done' AND file_path IS NOT NULL
+           ORDER BY finished_at DESC LIMIT 1"#,
+    )
+    .bind(url)
+    .fetch_optional(pool)
+    .await
+    .ok()??;
+
+    let task_id: String    = row.try_get("id").ok()?;
+    let file_path: String  = row.try_get("file_path").ok()?;
+    let ch_msg: Option<i64> = row.try_get("channel_msg_id").ok().unwrap_or(None);
+    Some((task_id, file_path, ch_msg))
+}
+
+/// Persist the storage-channel message ID for a task after a successful MTProto upload.
+pub async fn save_channel_msg_id(
+    pool: &SqlitePool,
+    task_id: &str,
+    channel_msg_id: i64,
+) -> Result<()> {
+    sqlx::query(
+        r#"UPDATE tasks SET channel_msg_id = ?, uploaded_at = CURRENT_TIMESTAMP WHERE id = ?"#,
+    )
+    .bind(channel_msg_id)
+    .bind(task_id)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
 /// Register or update user on first contact.
 pub async fn upsert_user(
     pool: &SqlitePool,

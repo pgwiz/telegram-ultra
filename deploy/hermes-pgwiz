@@ -662,6 +662,18 @@ setup_mtproto() {
     info "Running MTProto session setup (you will receive a Telegram OTP)..."
     cd "$HERMES_DIR"
     "$PYTHON_BIN" worker/setup_session.py
+
+    # Fix session file ownership so the hermes service user can write to it.
+    # Telethon writes to the .session SQLite file on every send_file(); if it is
+    # owned by root the upload throws "attempt to write a readonly database".
+    local sess_base="${MTPROTO_SESSION_PATH:-${HERMES_DIR}/hermes_session}"
+    [[ "$sess_base" != "/"* ]] && sess_base="${HERMES_DIR}/${sess_base#./}"
+    local abs_sess="${sess_base}.session"
+    if [[ -f "$abs_sess" ]]; then
+        chown hermes:hermes "$abs_sess" 2>/dev/null || true
+        chmod 600 "$abs_sess"
+        success "Session file permissions fixed: $abs_sess"
+    fi
 }
 
 # ══════════════════════════════════════════════════════════════════════════════
