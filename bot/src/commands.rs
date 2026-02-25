@@ -841,11 +841,17 @@ pub async fn handle_callback_query(
             let req = download_request(&task_id, &single_url, pf_is_audio, &out_dir);
             (single_url, "youtube_dl", req)
         } else {
-            // For playlists, use archive file for deduplication
-            let archive_path = format!("{}/playlist_archive.txt", state.download_dir);
-            info!("Playlist download: limit={:?}, url={}, is_audio={}", pending.limit, &pending.url, pf_is_audio);
+            // Only use the archive when downloading all tracks (no limit).
+            // With a limit (e.g. 10 tracks), the archive would cause yt-dlp to skip
+            // already-archived tracks and stop early, delivering fewer than requested.
+            let archive_opt = if pending.limit.is_none() {
+                Some(format!("{}/playlist_archive.txt", state.download_dir))
+            } else {
+                None
+            };
+            info!("Playlist download: limit={:?}, url={}, is_audio={}, archive={:?}", pending.limit, &pending.url, pf_is_audio, archive_opt.is_some());
             let req = playlist_request_opts(
-                &task_id, &pending.url, &out_dir, pending.limit, pf_is_audio, Some(&archive_path),
+                &task_id, &pending.url, &out_dir, pending.limit, pf_is_audio, archive_opt.as_deref(),
             );
             (pending.url.clone(), "playlist", req)
         };
