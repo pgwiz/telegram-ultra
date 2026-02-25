@@ -57,6 +57,7 @@ class Database:
             ("0003_user_preferences", self._migration_0003_user_preferences()),
             ("0004_cache_tables", self._migration_0004_cache_tables()),
             ("0005_rate_limiting", self._migration_0005_rate_limiting()),
+            ("0006_symlink_tracking", self._migration_0006_symlink_tracking()),
         ]
 
         failures = 0
@@ -341,6 +342,181 @@ class Database:
         CREATE INDEX IF NOT EXISTS idx_rate_limits_chat_id ON rate_limits(user_chat_id);
         CREATE INDEX IF NOT EXISTS idx_api_usage_stats_chat_id ON api_usage_stats(user_chat_id);
         """
+
+    @staticmethod
+    def _migration_0006_symlink_tracking() -> str:
+        """Smart track deduplication with symlinks."""
+        return """
+        CREATE TABLE IF NOT EXISTS file_storage (
+            file_hash_sha1 TEXT PRIMARY KEY,
+            physical_path TEXT NOT NULL UNIQUE,
+            file_size_bytes BIGINT,
+            file_extension TEXT,
+            youtube_url TEXT,
+            title TEXT,
+            first_downloaded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            access_count INTEGER DEFAULT 0,
+            last_accessed_at TIMESTAMP,
+            is_protected BOOLEAN DEFAULT TRUE
+        );
+
+        CREATE TABLE IF NOT EXISTS user_symlinks (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_chat_id INTEGER NOT NULL,
+            file_hash_sha1 TEXT NOT NULL,
+            symlink_path TEXT NOT NULL,
+            is_protected BOOLEAN DEFAULT FALSE,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (user_chat_id) REFERENCES users(chat_id) ON DELETE CASCADE,
+            FOREIGN KEY (file_hash_sha1) REFERENCES file_storage(file_hash_sha1) ON DELETE CASCADE,
+            UNIQUE(symlink_path)
+        );
+
+        CREATE TABLE IF NOT EXISTS dedup_user_preferences (
+            user_chat_id INTEGER PRIMARY KEY,
+            dedup_enabled BOOLEAN DEFAULT TRUE,
+            force_personal_copy BOOLEAN DEFAULT FALSE,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (user_chat_id) REFERENCES users(chat_id) ON DELETE CASCADE
+        );
+
+        CREATE TABLE IF NOT EXISTS dedup_file_metadata (
+            file_hash_sha1 TEXT PRIMARY KEY,
+            expected_size_bytes BIGINT,
+            expected_duration_seconds INTEGER,
+            corruption_checks INTEGER DEFAULT 0,
+            last_checked_at TIMESTAMP,
+            FOREIGN KEY (file_hash_sha1) REFERENCES file_storage(file_hash_sha1) ON DELETE CASCADE
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_file_storage_hash ON file_storage(file_hash_sha1);
+        CREATE INDEX IF NOT EXISTS idx_file_storage_url ON file_storage(youtube_url);
+        CREATE INDEX IF NOT EXISTS idx_user_symlinks_chat ON user_symlinks(user_chat_id);
+        CREATE INDEX IF NOT EXISTS idx_user_symlinks_hash ON user_symlinks(file_hash_sha1);
+        CREATE INDEX IF NOT EXISTS idx_user_symlinks_path ON user_symlinks(symlink_path);
+        """
+
+
+    async def create_user_preference(self, user_chat_id: int, dedup_enabled: bool = True) -> None:
+        """Initialize user deduplication preferences."""
+        try:
+            await self.execute('''
+                INSERT OR IGNORE INTO user_preferences (user_chat_id, dedup_enabled)
+                VALUES (?, ?)
+            ''', (user_chat_id, dedup_enabled))
+            await self.connection.commit()
+        except Exception as e:
+            logger.error(f"Failed to create user preference: {e}")
+
+    async def get_user_dedup_preference(self, user_chat_id: int) -> bool:
+        """Check if user has dedup enabled."""
+        try:
+            result = await self.fetch_one(
+                'SELECT dedup_enabled FROM user_preferences WHERE user_chat_id = ?',
+                (user_chat_id,)
+            )
+            return result.get('dedup_enabled', True) if result else True
+        except Exception as e:
+            logger.error(f"Failed to get user dedup preference: {e}")
+            return True  # Default: enabled
+
+    async def set_user_dedup_preference(self, user_chat_id: int, dedup_enabled: bool) -> None:
+        """Set user's deduplication preference."""
+        try:
+            # Ensure user preference record exists
+            await self.create_user_preference(user_chat_id, dedup_enabled)
+            # Update if it already exists
+            await self.execute('''
+                UPDATE user_preferences SET dedup_enabled = ? WHERE user_chat_id = ?
+            ''', (dedup_enabled, user_chat_id))
+            await self.connection.commit()
+        except Exception as e:
+            logger.error(f"Failed to set user dedup preference: {e}")
+
+    async def track_symlink(
+        self,
+        user_chat_id: int,
+        file_hash: str,
+        symlink_path: str,
+        protected: bool = False
+    ) -> None:
+        """Record symlink in database."""
+        try:
+            await self.execute('''
+                INSERT OR REPLACE INTO user_symlinks
+                (user_chat_id, file_hash_sha1, symlink_path, is_protected, created_at)
+                VALUES (?, ?, ?, ?, ?)
+            ''', (user_chat_id, file_hash, symlink_path, protected, datetime.now().isoformat()))
+            await self.connection.commit()
+        except Exception as e:
+            logger.error(f"Failed to track symlink: {e}")
+
+    async def get_file_hash_for_url(self, youtube_url: str) -> Optional[str]:
+        """Check if URL already downloaded (via file_storage metadata)."""
+        try:
+            result = await self.fetch_one(
+                'SELECT file_hash_sha1 FROM file_storage WHERE youtube_url = ?',
+                (youtube_url,)
+            )
+            return result.get('file_hash_sha1') if result else None
+        except Exception as e:
+            logger.error(f"Failed to get file hash for URL: {e}")
+            return None
+
+    async def repair_broken_symlink(self, symlink_path: str) -> bool:
+        """
+        Detect and repair broken symlink.
+        Returns: True if repaired, False if deleted
+        """
+        if not os.path.islink(symlink_path):
+            return False
+
+        if not os.path.exists(symlink_path):
+            # Symlink is broken
+            try:
+                result = await self.fetch_one(
+                    'SELECT file_hash_sha1 FROM user_symlinks WHERE symlink_path = ?',
+                    (symlink_path,)
+                )
+                if result:
+                    file_hash = result.get('file_hash_sha1')
+                    # Find physical file
+                    physical = await self.fetch_one(
+                        'SELECT physical_path FROM file_storage WHERE file_hash_sha1 = ?',
+                        (file_hash,)
+                    )
+                    if physical:
+                        physical_path = physical.get('physical_path')
+                        if os.path.exists(physical_path):
+                            # Recreate symlink
+                            try:
+                                os.remove(symlink_path)
+                                rel_path = os.path.relpath(physical_path, os.path.dirname(symlink_path))
+                                if os.name == 'nt':  # Windows
+                                    rel_path = rel_path.replace('/', '\\')
+                                os.symlink(rel_path, symlink_path)
+                                logger.info(f"Repaired broken symlink: {symlink_path}")
+                                return True
+                            except Exception as e:
+                                logger.error(f"Failed to repair symlink: {e}")
+                                return False
+
+                # Can't repair → delete entry
+                await self.delete(
+                    'DELETE FROM user_symlinks WHERE symlink_path = ?',
+                    (symlink_path,)
+                )
+                try:
+                    os.remove(symlink_path)
+                except:
+                    pass
+                logger.info(f"Removed broken symlink: {symlink_path}")
+                return False
+            except Exception as e:
+                logger.error(f"Error in repair_broken_symlink: {e}")
+                return False
+
+        return True  # Symlink is healthy
 
 
 # Global database instance

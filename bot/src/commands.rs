@@ -66,6 +66,10 @@ pub enum Command {
     Chatid,
     #[command(description = "Open OTP-free login window for N seconds (admin, max 300)")]
     Allow(String),
+    #[command(description = "Toggle track deduplication")]
+    DedupToggle,
+    #[command(description = "Show deduplication status")]
+    DedupStatus,
 }
 
 /// Shared application state passed to handlers.
@@ -109,6 +113,8 @@ pub async fn handle_command(
         Command::Upcook(content) => cmd_upcook(bot, msg, content, state).await,
         Command::Chatid => cmd_chatid(bot, msg).await,
         Command::Allow(secs_str) => cmd_allow(bot, msg, secs_str, state).await,
+        Command::DedupToggle => cmd_dedup_toggle(bot, msg, state).await,
+        Command::DedupStatus => cmd_dedup_status(bot, msg, state).await,
     }
 }
 
@@ -1792,6 +1798,82 @@ pub async fn handle_message(
             }
         }
     }
+    Ok(())
+}
+
+/// /dedup_toggle - Toggle track deduplication for this user
+async fn cmd_dedup_toggle(bot: Bot, msg: Message, state: Arc<AppState>) -> ResponseResult<()> {
+    let chat_id = msg.chat.id;
+
+    if let Some(pool) = &state.db_pool {
+        // Get current preference
+        let current = hermes_shared::db::get_user_dedup_preference(pool, chat_id.0)
+            .await
+            .unwrap_or(true);
+
+        // Toggle
+        let new_state = !current;
+
+        // Update database
+        if let Err(e) = hermes_shared::db::set_user_dedup_preference(pool, chat_id.0, new_state).await {
+            error!("Failed to set dedup preference: {}", e);
+            bot.send_message(chat_id, "❌ Failed to update deduplication setting").await?;
+            return Ok(());
+        }
+
+        let status = if new_state { "Enabled ✅" } else { "Disabled ❌" };
+        let message = format!(
+            "🔄 <b>Track Deduplication {}</b>\n\n\
+            <b>When enabled (default):</b>\n\
+            • Shared tracks use symlinks (saves space)\n\
+            • Automatic dedup across downloads\n\n\
+            <b>When disabled:</b>\n\
+            • You get fresh copies of each track\n\
+            • Uses more storage but fully independent",
+            status
+        );
+
+        bot.send_message(chat_id, message)
+            .parse_mode(ParseMode::Html)
+            .await?;
+    } else {
+        bot.send_message(chat_id, "⚠️ Database not available").await?;
+    }
+
+    Ok(())
+}
+
+/// /dedup_status - Show current deduplication status
+async fn cmd_dedup_status(bot: Bot, msg: Message, state: Arc<AppState>) -> ResponseResult<()> {
+    let chat_id = msg.chat.id;
+
+    if let Some(pool) = &state.db_pool {
+        let enabled = hermes_shared::db::get_user_dedup_preference(pool, chat_id.0)
+            .await
+            .unwrap_or(true);
+
+        let status_str = if enabled { "Enabled ✅" } else { "Disabled ❌" };
+        let icon = if enabled { "🔗" } else { "📁" };
+        let details = if enabled {
+            "Duplicate tracks are automatically detected and shared via symlinks to save storage space."
+        } else {
+            "Each track is downloaded as an independent copy. No deduplication is applied."
+        };
+
+        let message = format!(
+            "{} <b>Track Deduplication: {}</b>\n\n\
+            {}\n\n\
+            Use /dedup_toggle to change this setting.",
+            icon, status_str, details
+        );
+
+        bot.send_message(chat_id, message)
+            .parse_mode(ParseMode::Html)
+            .await?;
+    } else {
+        bot.send_message(chat_id, "⚠️ Database not available").await?;
+    }
+
     Ok(())
 }
 

@@ -618,3 +618,36 @@ pub async fn get_allow_window_remaining(pool: &SqlitePool) -> Result<Option<i64>
     .await?;
     Ok(row.map(|r| r.0))
 }
+
+// ====== DEDUPLICATION PREFERENCES ======
+
+/// Get user's deduplication preference (default: true/enabled).
+pub async fn get_user_dedup_preference(pool: &SqlitePool, chat_id: i64) -> Result<bool> {
+    let row: Option<(bool,)> = sqlx::query_as(
+        "SELECT dedup_enabled FROM dedup_user_preferences WHERE user_chat_id = ?"
+    )
+    .bind(chat_id)
+    .fetch_optional(pool)
+    .await?;
+
+    Ok(row.map(|r| r.0).unwrap_or(true))
+}
+
+/// Set user's deduplication preference.
+pub async fn set_user_dedup_preference(
+    pool: &SqlitePool,
+    chat_id: i64,
+    dedup_enabled: bool,
+) -> Result<()> {
+    sqlx::query(
+        "INSERT INTO dedup_user_preferences (user_chat_id, dedup_enabled) \
+         VALUES (?, ?) \
+         ON CONFLICT(user_chat_id) DO UPDATE SET dedup_enabled = excluded.dedup_enabled"
+    )
+    .bind(chat_id)
+    .bind(dedup_enabled)
+    .execute(pool)
+    .await?;
+
+    Ok(())
+}

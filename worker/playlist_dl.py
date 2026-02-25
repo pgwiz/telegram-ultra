@@ -18,6 +18,7 @@ from worker.cookies import get_yt_dlp_cookie_args
 from worker.utils import sanitize_filename, sanitize_folder_name, safe_mkdir, safe_rmtree, find_node_binary
 from worker.error_handlers import categorize_error, get_error
 from worker.progress_hooks import StreamProgressCollector
+from worker.storage import StorageManager
 
 
 logger = logging.getLogger(__name__)
@@ -129,8 +130,12 @@ async def handle_playlist_download(ipc: IPCHandler, task_id: str, request: dict)
         logger.info(f"[{task_id}] Output directory: {output_dir}")
 
         # Download all tracks
+        # Extract user_chat_id from request if available for deduplication
+        user_chat_id = request.get('user_chat_id') or params.get('user_chat_id')
+        database = params.get('database')  # Optional: database instance for dedup
+
         downloaded_files = await _download_playlist_tracks(
-            ipc, task_id, url, output_dir, params, total_tracks
+            ipc, task_id, url, output_dir, params, total_tracks, database, user_chat_id
         )
 
         if not downloaded_files:
@@ -239,7 +244,7 @@ async def _get_playlist_info(task_id: str, url: str) -> Optional[Dict[str, Any]]
 
 
 async def _download_playlist_tracks(ipc: IPCHandler, task_id: str, url: str, output_dir: str,
-                                   params: dict, total_tracks: int) -> List[str]:
+                                   params: dict, total_tracks: int, database=None, user_chat_id=None) -> List[str]:
     """Download all tracks in playlist."""
     try:
         extract_audio = params.get('extract_audio', False)
@@ -361,6 +366,39 @@ async def _download_playlist_tracks(ipc: IPCHandler, task_id: str, url: str, out
                     filepath = os.path.join(output_dir, filename)
                     if os.path.getsize(filepath) > 0:
                         downloaded_files.append(filepath)
+
+        # Process files through deduplication system if enabled
+        if database and user_chat_id and downloaded_files:
+            try:
+                # Check if user has dedup enabled
+                use_dedup = await database.get_user_dedup_preference(user_chat_id)
+
+                if use_dedup:
+                    logger.info(f"[{task_id}] Processing {len(downloaded_files)} files through dedup system")
+                    storage_manager = StorageManager(params.get('output_dir', config.DOWNLOAD_DIR))
+                    final_paths = []
+
+                    for temp_file in downloaded_files:
+                        try:
+                            # Move/symlink file to final location
+                            # File is already in user_output_dir, so target_path = temp_file
+                            success, final_path = await storage_manager.store_or_link(
+                                source_file=temp_file,
+                                target_path=temp_file,
+                                database=database,
+                                user_chat_id=user_chat_id,
+                                use_symlink=True
+                            )
+                            if success:
+                                final_paths.append(final_path)
+                        except Exception as e:
+                            logger.error(f"[{task_id}] Failed to process file through dedup: {e}")
+                            # Fall back to using original file
+                            final_paths.append(temp_file)
+
+                    return sorted(final_paths)
+            except Exception as e:
+                logger.error(f"[{task_id}] Dedup processing failed, using original files: {e}")
 
         return sorted(downloaded_files)
 

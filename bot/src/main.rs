@@ -50,6 +50,16 @@ async fn main() {
     // Ensure download directory exists
     std::fs::create_dir_all(&download_dir).expect("Failed to create download directory");
 
+    // Initialize deduplication storage structure
+    let storage_pool_dir = std::path::Path::new(&download_dir)
+        .join(".storage")
+        .join("tracks");
+    if let Err(e) = std::fs::create_dir_all(&storage_pool_dir) {
+        error!("Failed to create storage pool directory: {}", e);
+    } else {
+        info!("Storage pool initialized: {}", storage_pool_dir.display());
+    }
+
     // Pre-flight check: verify Python can import the worker module
     {
         let py = python_bin.as_deref().unwrap_or(if cfg!(target_os = "windows") { "python" } else { "python3" });
