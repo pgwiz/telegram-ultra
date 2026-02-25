@@ -1,6 +1,7 @@
 /// Database connection pool and helpers for Hermes.
 use anyhow::Result;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions, SqliteJournalMode};
+use sqlx::Row;
 use std::str::FromStr;
 use tracing::info;
 
@@ -622,32 +623,64 @@ pub async fn get_allow_window_remaining(pool: &SqlitePool) -> Result<Option<i64>
 // ====== DEDUPLICATION PREFERENCES ======
 
 /// Get user's deduplication preference (default: true/enabled).
+/// Returns true if dedup is enabled, false if disabled, or true if preference not found.
 pub async fn get_user_dedup_preference(pool: &SqlitePool, chat_id: i64) -> Result<bool> {
-    let row: Option<(bool,)> = sqlx::query_as(
-        "SELECT dedup_enabled FROM dedup_user_preferences WHERE user_chat_id = ?"
-    )
-    .bind(chat_id)
-    .fetch_optional(pool)
-    .await?;
-
-    Ok(row.map(|r| r.0).unwrap_or(true))
+    // Try to read dedup preference; default to true if not found or column doesn't exist
+    // Using raw query to avoid sqlx compile-time checking of non-existent columns
+    match sqlx::query("SELECT COALESCE(dedup_enabled, 1) as enabled FROM user_preferences WHERE chat_id = ?")
+        .bind(chat_id)
+        .fetch_optional(pool)
+        .await {
+            Ok(Some(row)) => {
+                // try to extract the value; if it fails, default to true
+                match row.try_get::<i64, _>("enabled") {
+                    Ok(val) => Ok(val != 0),
+                    Err(_) => Ok(true), // Column doesn't exist or can't read, default to true
+                }
+            }
+            Ok(None) => Ok(true), // User not found, return default true
+            Err(_) => Ok(true), // Query failed (table/column doesn't exist), return default true
+        }
 }
 
 /// Set user's deduplication preference.
+/// Inserts or updates the user's dedup preference.
 pub async fn set_user_dedup_preference(
     pool: &SqlitePool,
     chat_id: i64,
     dedup_enabled: bool,
 ) -> Result<()> {
+    // First ensure user exists in users table
     sqlx::query(
-        "INSERT INTO dedup_user_preferences (user_chat_id, dedup_enabled) \
-         VALUES (?, ?) \
-         ON CONFLICT(user_chat_id) DO UPDATE SET dedup_enabled = excluded.dedup_enabled"
+        "INSERT OR IGNORE INTO users (chat_id) VALUES (?)"
     )
     .bind(chat_id)
-    .bind(dedup_enabled)
     .execute(pool)
     .await?;
 
-    Ok(())
+    // Then ensure user has an entry in user_preferences
+    sqlx::query(
+        "INSERT OR IGNORE INTO user_preferences (chat_id) VALUES (?)"
+    )
+    .bind(chat_id)
+    .execute(pool)
+    .await?;
+
+    // Finally update the dedup_enabled preference
+    // Use dynamic query since column might not exist in older databases
+    match sqlx::query(
+        "UPDATE user_preferences SET dedup_enabled = ? WHERE chat_id = ?"
+    )
+    .bind(dedup_enabled)
+    .bind(chat_id)
+    .execute(pool)
+    .await {
+        Ok(_) => Ok(()),
+        Err(e) => {
+            // If column doesn't exist, log warning but don't fail
+            // The system will use default behavior
+            tracing::warn!("Could not update dedup preference (column may not exist yet): {}", e);
+            Ok(())
+        }
+    }
 }
