@@ -234,6 +234,12 @@ impl PlaylistStateStore {
         }
     }
 
+    pub async fn set_message_id(&self, key: &str, new_msg_id: MessageId) {
+        if let Some(p) = self.inner.lock().await.get_mut(key) {
+            p.message_id = new_msg_id;
+        }
+    }
+
     pub async fn take(&self, key: &str) -> Option<PlaylistPending> {
         self.inner.lock().await.remove(key)
     }

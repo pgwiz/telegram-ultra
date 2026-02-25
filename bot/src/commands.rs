@@ -797,18 +797,21 @@ pub async fn handle_callback_query(
         let format_msg_text = format!("Downloading {} — choose format:", limit_label);
         let keyboard = InlineKeyboardMarkup::new(buttons);
 
-        // Send new message instead of trying to edit
-        // (Telegram sometimes blocks editing certain message types)
-        let new_msg = bot.send_message(chat_id, format_msg_text)
+        // Send new format selection message (replaces limit selection message)
+        match bot.send_message(chat_id, format_msg_text)
             .reply_markup(keyboard)
-            .await;
-
-        // If we successfully sent a new message, try to delete the old one
-        if new_msg.is_ok() {
-            let _ = bot.delete_message(chat_id, msg_id).await;
-            info!("Sent format selection message (replaced limit selection message)");
-        } else {
-            error!("Failed to send format selection message: {:?}", new_msg);
+            .await
+        {
+            Ok(new_msg) => {
+                // Update pending store with the new message id so status edits work later
+                state.playlist_store.set_message_id(pl_key, new_msg.id).await;
+                // Delete old limit-selection message
+                let _ = bot.delete_message(chat_id, msg_id).await;
+                info!("Sent format selection message (replaced limit selection message)");
+            }
+            Err(e) => {
+                error!("Failed to send format selection message: {:?}", e);
+            }
         }
         return Ok(());
     }
@@ -859,14 +862,22 @@ pub async fn handle_callback_query(
         let dl_mode    = if pf_is_audio { DownloadMode::Audio } else { DownloadMode::Video };
         let kind_label = if is_single { "video" } else { "playlist" };
 
-        let _ = bot.edit_message_text(chat_id, msg_id,
+        // Delete format selection message, send a fresh status message to track progress on
+        let _ = bot.delete_message(chat_id, msg_id).await;
+        let status_msg = bot.send_message(chat_id,
             format!("Queued {} [{}]", kind_label, short_id)
-        ).reply_markup(InlineKeyboardMarkup::new(Vec::<Vec<InlineKeyboardButton>>::new())).await;
+        ).await;
+
+        // Use the new status message for progress tracking; fall back to original if send failed
+        let track_msg_id = match status_msg {
+            Ok(ref m) => m.id,
+            Err(_)    => msg_id,
+        };
 
         let state2 = state.clone();
         tokio::spawn(async move {
             let _ = execute_download_and_send(
-                &bot, chat_id, msg_id, &short_id,
+                &bot, chat_id, track_msg_id, &short_id,
                 kind_label, &task_id, &request, dl_mode, &state2,
             ).await;
         });
@@ -1156,9 +1167,10 @@ pub async fn execute_download_and_send(
                     let _ = hermes_shared::db::complete_task(pool, task_id, file_path).await;
                 }
 
-                bot.edit_message_text(chat_id, status_msg_id, format!(
+                // Edit message to show completion (don't use ? - must continue to send files even if edit fails)
+                let _ = bot.edit_message_text(chat_id, status_msg_id, format!(
                     "Download complete [{}]\nFile: {}", short_id, filename
-                )).await?;
+                )).await;
 
                 // Send the file to user
                 let path = std::path::PathBuf::from(file_path);
@@ -1170,10 +1182,10 @@ pub async fn execute_download_and_send(
                         // >50MB: send as document
                         if let Err(e) = bot.send_document(chat_id, input).await {
                             warn!("Failed to send document: {}", e);
-                            bot.send_message(chat_id, format!(
+                            let _ = bot.send_message(chat_id, format!(
                                 "File too large for Telegram ({:.1}MB)",
                                 file_size as f64 / 1024.0 / 1024.0
-                            )).await?;
+                            )).await;
                         }
                     } else if mode == DownloadMode::Video {
                         // Send as video (shows inline player)
