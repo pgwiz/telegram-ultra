@@ -657,6 +657,65 @@ pub async fn download_file(
     ))
 }
 
+/// GET /api/dl/:task_id - Public (no auth) file download via temporary token.
+///
+/// The token is the task_id itself; a short-lived entry is created in the
+/// sessions table by the bot when a file is too large to send via Telegram.
+pub async fn public_download_file(
+    State(state): State<Arc<AppState>>,
+    Path(task_id): Path<String>,
+) -> Result<impl IntoResponse, StatusCode> {
+    // Validate token
+    let _chat_id = hermes_shared::db::validate_file_download_token(&state.pool, &task_id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .ok_or(StatusCode::NOT_FOUND)?;  // 404 = expired or never created
+
+    let task = db::get_task_by_id(&state.pool, &task_id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .ok_or(StatusCode::NOT_FOUND)?;
+
+    let file_path = task.file_path.ok_or(StatusCode::NOT_FOUND)?;
+
+    let path = std::path::Path::new(&file_path);
+    if !path.exists() {
+        return Err(StatusCode::NOT_FOUND);
+    }
+
+    let filename = path.file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("download");
+
+    let file = tokio::fs::File::open(&file_path)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    let stream = ReaderStream::new(file);
+    let body = Body::from_stream(stream);
+
+    let content_type = if filename.ends_with(".mp4") || filename.ends_with(".mkv") || filename.ends_with(".webm") {
+        "video/mp4"
+    } else if filename.ends_with(".mp3") {
+        "audio/mpeg"
+    } else if filename.ends_with(".m4a") || filename.ends_with(".aac") {
+        "audio/mp4"
+    } else {
+        "application/octet-stream"
+    };
+
+    let disposition = format!("attachment; filename=\"{}\"", filename.replace('"', "_"));
+
+    Ok((
+        StatusCode::OK,
+        [
+            (header::CONTENT_TYPE, content_type.to_string()),
+            (header::CONTENT_DISPOSITION, disposition),
+        ],
+        body,
+    ))
+}
+
 /// DELETE /api/files/:id - Delete a completed download file from disk and DB
 pub async fn delete_file(
     State(state): State<Arc<AppState>>,

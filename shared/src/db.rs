@@ -684,3 +684,47 @@ pub async fn set_user_dedup_preference(
         }
     }
 }
+
+/// Create a temporary unauthenticated file download token.
+///
+/// Stores `file_dl:{task_id}` in sessions with a TTL.
+/// The task_id itself is the URL token — no separate random value needed
+/// since UUIDs are unguessable enough for short-lived links.
+pub async fn create_file_download_token(
+    pool: &SqlitePool,
+    task_id: &str,
+    chat_id: i64,
+    ttl_secs: i64,
+) -> Result<()> {
+    let token = format!("file_dl:{}", task_id);
+    // Remove any existing token for this task before inserting
+    sqlx::query("DELETE FROM sessions WHERE token = ?")
+        .bind(&token)
+        .execute(pool)
+        .await?;
+    sqlx::query(
+        "INSERT INTO sessions (token, chat_id, expires_at) VALUES (?, ?, datetime('now', '+' || ? || ' seconds'))"
+    )
+    .bind(&token)
+    .bind(chat_id)
+    .bind(ttl_secs)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// Validate a file download token and return the owning chat_id.
+/// Returns None if the token is missing or expired.
+pub async fn validate_file_download_token(
+    pool: &SqlitePool,
+    task_id: &str,
+) -> Result<Option<i64>> {
+    let token = format!("file_dl:{}", task_id);
+    let row: Option<(i64,)> = sqlx::query_as(
+        "SELECT chat_id FROM sessions WHERE token = ? AND expires_at > datetime('now')"
+    )
+    .bind(&token)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row.map(|(id,)| id))
+}

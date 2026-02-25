@@ -111,6 +111,8 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/auth/allow-status", get(routes::allow_status))
         .route("/api/auth/quick-login", post(routes::quick_login))
         .route("/api/bot-info", get(routes::bot_info))
+        // Public file download via temporary token (no auth, used for oversized files)
+        .route("/api/dl/:task_id", get(routes::public_download_file))
         // Auth-protected routes
         .route("/api/auth/logout", delete(routes::logout))
         .route("/api/download", post(routes::submit_download))

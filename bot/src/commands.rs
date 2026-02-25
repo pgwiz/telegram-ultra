@@ -1185,17 +1185,50 @@ pub async fn execute_download_and_send(
 
                     if file_size > 50 * 1024 * 1024 {
                         // Telegram Bot API hard limit is 50MB for all upload types.
-                        // Never attempt the upload — just tell the user.
+                        // Either use MTProto (MPROTO=true) or generate a 24h download link.
                         let size_mb = file_size as f64 / 1024.0 / 1024.0;
-                        let hint = if mode == DownloadMode::Video {
-                            "Use /dv to pick a lower resolution."
+                        let use_mproto = std::env::var("MPROTO")
+                            .map(|v| v.to_lowercase() == "true")
+                            .unwrap_or(false);
+
+                        if use_mproto {
+                            // MTProto upload path — placeholder until Telethon integration
+                            let _ = bot.send_message(chat_id, format!(
+                                "⏳ File too large for Bot API ({:.1}MB)\nMTProto upload queued...",
+                                size_mb
+                            )).await;
+                        } else if let Some(pool) = &state.db_pool {
+                            // Generate a 24h download token and send a direct link
+                            let dashboard_url = std::env::var("DASHBOARD_URL")
+                                .unwrap_or_else(|_| "https://tg-hermes-bot.pgwiz.cloud".to_string());
+                            match hermes_shared::db::create_file_download_token(pool, task_id, chat_id.0, 86400).await {
+                                Ok(_) => {
+                                    let dl_url = format!("{}/api/dl/{}", dashboard_url, task_id);
+                                    let _ = bot.send_message(chat_id, format!(
+                                        "⚠️ File too large for Telegram ({:.1}MB)\n\n📥 Download link (24h):\n{}",
+                                        size_mb, dl_url
+                                    )).await;
+                                }
+                                Err(e) => {
+                                    warn!("Failed to create download token for {}: {}", task_id, e);
+                                    let _ = bot.send_message(chat_id, format!(
+                                        "⚠️ File too large for Telegram ({:.1}MB)\nCouldn't generate download link.",
+                                        size_mb
+                                    )).await;
+                                }
+                            }
                         } else {
-                            "The file is too long/large for Telegram's 50MB limit."
-                        };
-                        let _ = bot.send_message(chat_id, format!(
-                            "⚠️ File too large for Telegram ({:.1}MB)\n\n{}",
-                            size_mb, hint
-                        )).await;
+                            // No DB available — fall back to a plain hint
+                            let hint = if mode == DownloadMode::Video {
+                                "Use /dv to pick a lower resolution."
+                            } else {
+                                "The file exceeds Telegram's 50MB limit."
+                            };
+                            let _ = bot.send_message(chat_id, format!(
+                                "⚠️ File too large for Telegram ({:.1}MB)\n\n{}",
+                                size_mb, hint
+                            )).await;
+                        }
                     } else if mode == DownloadMode::Video {
                         // Send as video (shows inline player)
                         let input = teloxide::types::InputFile::file(&path);
