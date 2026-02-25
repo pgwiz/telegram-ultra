@@ -256,6 +256,7 @@ async def _download_playlist_tracks(ipc: IPCHandler, task_id: str, url: str, out
 
         # Limit tracks for Radio Mixes (infinite) and large playlists
         playlist_end = params.get('playlist_end', 50)
+        logger.info(f"[{task_id}] Playlist params: playlist_end={playlist_end}, extract_audio={extract_audio}, archive_file={params.get('archive_file')}")
         if playlist_end:
             command.extend(['--playlist-end', str(playlist_end)])
 

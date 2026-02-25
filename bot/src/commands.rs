@@ -799,6 +799,7 @@ pub async fn handle_callback_query(
         } else {
             // For playlists, use archive file for deduplication
             let archive_path = format!("{}/playlist_archive.txt", state.download_dir);
+            info!("Playlist download: limit={:?}, url={}, is_audio={}", pending.limit, &pending.url, pf_is_audio);
             let req = playlist_request_opts(
                 &task_id, &pending.url, &out_dir, pending.limit, pf_is_audio, Some(&archive_path),
             );
