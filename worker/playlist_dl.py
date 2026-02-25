@@ -40,15 +40,20 @@ def normalize_playlist_url(url: str) -> str:
     Radio Mix URLs (list=RD...) expire when used as a plain playlist URL.
     They must include the seed video + start_radio=1 to work reliably.
     """
-    radio_match = re.search(r'list=(RD([a-zA-Z0-9_-]+))', url)
-    if radio_match:
-        full_list_id = radio_match.group(1)   # e.g. RDEgBJmlPo8Xw
-        video_id     = radio_match.group(2)   # e.g. EgBJmlPo8Xw
-        if 'start_radio=1' in url and f'v={video_id}' in url:
-            return url
+    # First, extract the actual video ID from v= parameter (not from list ID)
+    video_match = re.search(r'v=([a-zA-Z0-9_-]{11})', url)
+    radio_match = re.search(r'list=(RD[a-zA-Z0-9_-]+)', url)
+
+    if radio_match and video_match:
+        list_id = radio_match.group(1)      # e.g. RDEgBJmlPo8Xw
+        video_id = video_match.group(1)     # e.g. EgBJmlPo8Xw (from v= parameter)
+
+        if 'start_radio=1' in url:
+            return url  # Already normalized
+
         return (
             f"https://www.youtube.com/watch?v={video_id}"
-            f"&list={full_list_id}&start_radio=1"
+            f"&list={list_id}&start_radio=1"
         )
     return url
 
