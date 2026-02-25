@@ -1250,7 +1250,9 @@ async fn cmd_playlist_preview(
 
     // Check if this is a Radio Mix (list=RD pattern)
     // Radio Mixes are infinite and slow to preview, so skip to track selection
-    if url.contains("list=RD") {
+    // Match list=RD as a URL parameter (preceded by ? or &), not as part of a video ID
+    let is_radio_mix = url.contains("?list=RD") || url.contains("&list=RD");
+    if is_radio_mix {
         let key = format!("{:x}", chrono::Utc::now().timestamp_millis());
         state.playlist_store.store(key.clone(), PlaylistPending {
             url: url.to_string(),
