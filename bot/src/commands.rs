@@ -1060,6 +1060,8 @@ pub async fn execute_download_and_send(
     mode: DownloadMode,
     state: &AppState,
 ) -> ResponseResult<()> {
+    info!("[{short_id}] Starting download: kind={}, action={:?}", kind, request.action);
+
     // Acquire concurrency slot
     if !state.task_queue.acquire(task_id).await {
         bot.edit_message_text(chat_id, status_msg_id, format!(
@@ -1067,6 +1069,8 @@ pub async fn execute_download_and_send(
         )).await?;
         return Ok(());
     }
+
+    info!("[{short_id}] Acquired download slot");
 
     // Send to Python worker and process response stream
     let mut rx = match state.dispatcher.send(request).await {
@@ -1080,6 +1084,8 @@ pub async fn execute_download_and_send(
             return Ok(());
         }
     };
+
+    info!("[{short_id}] Sent request to Python worker, waiting for responses");
 
     // Process response stream with throttled progress updates
     let mut last_edit = Instant::now();
@@ -1120,6 +1126,11 @@ pub async fn execute_download_and_send(
     // Handle result
     match result {
         Ok(Some(response)) => {
+            info!("[{short_id}] Received response: event={:?}, data keys={:?}",
+                response.event,
+                response.data.as_object().map(|obj| obj.keys().collect::<Vec<_>>())
+            );
+
             if response.is_error() {
                 let error_msg = response.error_message().unwrap_or_else(|| "Unknown error".into());
                 state.task_queue.fail(task_id).await;
@@ -1185,6 +1196,7 @@ pub async fn execute_download_and_send(
 
                 // Handle playlist files - send each individually
                 if let Some(files) = response.data.get("files").and_then(|v| v.as_array()) {
+                    info!("[{short_id}] Found 'files' array with {} entries", files.len());
                     if !files.is_empty() {
                         let _ = bot.send_message(chat_id, format!(
                             "📤 Sending {} track(s)...",
@@ -1194,6 +1206,8 @@ pub async fn execute_download_and_send(
                         for (idx, file_info) in files.iter().enumerate() {
                             let file_path = file_info.get("path").and_then(|v| v.as_str()).unwrap_or("");
                             let file_name = file_info.get("name").and_then(|v| v.as_str()).unwrap_or("track");
+
+                            info!("[{short_id}] Sending file {}/{}: {}", idx + 1, files.len(), file_name);
 
                             let fpath = std::path::PathBuf::from(file_path);
                             if fpath.exists() {
@@ -1209,6 +1223,8 @@ pub async fn execute_download_and_send(
                                 if idx < files.len() - 1 {
                                     tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
                                 }
+                            } else {
+                                warn!("[{short_id}] File not found: {}", file_path);
                             }
                         }
 
@@ -1216,17 +1232,21 @@ pub async fn execute_download_and_send(
                             "✅ Sent all {} tracks", files.len()
                         )).await;
                     }
-                } else if let Some(archives) = response.data.get("archives").and_then(|v| v.as_array()) {
+                } else {
+                    info!("[{short_id}] No 'files' array in response data");
                     // Fallback: handle archives if present (for backward compatibility)
-                    for archive in archives {
-                        let archive_path = archive.get("path").and_then(|v| v.as_str()).unwrap_or("");
-                        let archive_name = archive.get("name").and_then(|v| v.as_str()).unwrap_or("archive.zip");
+                    if let Some(archives) = response.data.get("archives").and_then(|v| v.as_array()) {
+                        info!("[{short_id}] Found 'archives' array with {} entries", archives.len());
+                        for archive in archives {
+                            let archive_path = archive.get("path").and_then(|v| v.as_str()).unwrap_or("");
+                            let archive_name = archive.get("name").and_then(|v| v.as_str()).unwrap_or("archive.zip");
 
-                        let apath = std::path::PathBuf::from(archive_path);
-                        if apath.exists() {
-                            let input = teloxide::types::InputFile::file(&apath);
-                            if let Err(e) = bot.send_document(chat_id, input).await {
-                                warn!("Failed to send archive {}: {}", archive_name, e);
+                            let apath = std::path::PathBuf::from(archive_path);
+                            if apath.exists() {
+                                let input = teloxide::types::InputFile::file(&apath);
+                                if let Err(e) = bot.send_document(chat_id, input).await {
+                                    warn!("Failed to send archive {}: {}", archive_name, e);
+                                }
                             }
                         }
                     }

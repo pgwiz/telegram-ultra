@@ -173,6 +173,9 @@ async def handle_playlist_download(ipc: IPCHandler, task_id: str, request: dict)
 
         ipc.send_progress(task_id, 100, status='completed')
 
+        logger.info(f"[{task_id}] Sending Done event with {len(files)} files")
+        logger.debug(f"[{task_id}] Files data: {files}")
+
         ipc.send_response(task_id, 'done', {
             'playlist_name': playlist_name,
             'total_tracks_downloaded': len(downloaded_files),

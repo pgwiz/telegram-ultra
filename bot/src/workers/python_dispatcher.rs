@@ -213,18 +213,26 @@ impl PythonDispatcher {
                     continue;
                 }
 
+                debug!("Raw line from worker stdout: {}", &line[..line.len().min(200)]);
+
                 match IPCResponse::from_json_line(&line) {
                     Ok(response) => {
                         let task_id = response.task_id.clone();
-                        debug!("Received from worker: task={} event={:?}", task_id, response.event);
+                        debug!("Received from worker: task={} event={:?}, data keys={:?}",
+                            task_id,
+                            response.event,
+                            response.data.as_object().map(|obj| obj.keys().collect::<Vec<_>>())
+                        );
 
                         let pending = pending_clone.lock().await;
                         if let Some(tx) = pending.get(&task_id) {
                             if let Err(e) = tx.send(response) {
                                 warn!("Failed to route response for task {}: {}", task_id, e);
+                            } else {
+                                debug!("Successfully routed response for task {}", task_id);
                             }
                         } else {
-                            warn!("No pending handler for task {}", task_id);
+                            warn!("No pending handler for task {} (pending tasks: {:?})", task_id, pending.keys().collect::<Vec<_>>());
                         }
                     }
                     Err(e) => {
