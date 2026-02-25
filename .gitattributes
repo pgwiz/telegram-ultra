@@ -1,0 +1,30 @@
+# Git line ending normalization
+# All text files should use LF line endings (Unix style)
+
+* text=auto
+
+# Source code - always LF
+*.rs text eol=lf
+*.py text eol=lf
+*.sql text eol=lf
+*.toml text eol=lf
+*.json text eol=lf
+*.md text eol=lf
+*.yml text eol=yml
+*.yaml text eol=lf
+*.sh text eol=lf
+*.bash text eol=lf
+
+# Windows batch files - CRLF
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
+
+# Binary files
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.db binary
+*.sqlite binary
