@@ -1286,28 +1286,39 @@ async fn cmd_playlist_preview(
                         .unwrap_or(&empty_vec);
 
                     // Format message
-                    let mut msg_text = format!("🎵 **{}**\n", title);
-                    msg_text.push_str(&format!("{} tracks total\n\n", count));
+                    let mut msg_text = format!("🎵 **{}**\n\n", title);
+
+                    // Show track count or note if unknown (infinite playlists)
+                    if count > 0 {
+                        msg_text.push_str(&format!("📊 {} tracks total\n\n", count));
+                    } else {
+                        msg_text.push_str("📊 Total tracks: Unknown (infinite or uncountable playlist)\n\n");
+                    }
 
                     // Show first few tracks
+                    msg_text.push_str("**Preview \\(first tracks\\):**\n");
                     for track in tracks.iter().take(5) {
                         if let Some(track_obj) = track.as_object() {
                             if let (Some(idx), Some(track_title)) = (
                                 track_obj.get("index").and_then(|v| v.as_u64()),
                                 track_obj.get("title").and_then(|v| v.as_str()),
                             ) {
-                                msg_text.push_str(&format!("{}. {}\n", idx, track_title));
+                                msg_text.push_str(&format!("{}\\. {}\n", idx, track_title));
                             }
                         }
                     }
 
                     if tracks.len() > 5 {
-                        msg_text.push_str(&format!("... and {} more\n\n", count as usize - 5));
+                        if count > 5 {
+                            msg_text.push_str(&format!("\n\\.\\.\\. and {} more\n", count - 5));
+                        } else {
+                            msg_text.push_str("\n\\.\\.\\. and more available\n");
+                        }
                     } else {
                         msg_text.push('\n');
                     }
 
-                    msg_text.push_str(&format!("[Download Full Playlist]({})", url));
+                    msg_text.push_str("\n**Choose how many tracks to download:**");
 
                     // Update message with preview + button
                     let keyboard = InlineKeyboardMarkup::new(vec![
