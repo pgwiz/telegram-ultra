@@ -200,6 +200,7 @@ async def _get_playlist_info(task_id: str, url: str) -> Optional[Dict[str, Any]]
         command = [
             sys.executable, '-m', 'yt_dlp',
             url,
+            '--yes-playlist',   # Force playlist mode (needed for v=...&list=RD... Radio Mix URLs)
             '--dump-single-json',
             '--flat-playlist',
             '--no-cache-dir',
@@ -262,6 +263,7 @@ async def _download_playlist_tracks(ipc: IPCHandler, task_id: str, url: str, out
         command = [
             sys.executable, '-m', 'yt_dlp',
             url,
+            '--yes-playlist',   # Force playlist mode even when v= and list= both present (Radio Mix)
             '--no-cache-dir',
             '--ignore-errors',
             '--socket-timeout', '10',
