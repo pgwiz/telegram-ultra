@@ -5,6 +5,7 @@ Handles media intelligence operations via IPC protocol
 """
 
 import asyncio
+import os
 import sys
 import logging
 from worker.config import config
@@ -80,6 +81,12 @@ def setup_handlers():
     ipc_handler.register('health_check', health_check)
     logger.info("✅ All handlers registered (Phase C with caching)")
 
+    # MTProto upload (only when MPROTO=true)
+    if os.getenv("MPROTO", "false").lower() == "true":
+        from worker.mtproto_upload import handle_mtproto_upload
+        ipc_handler.register('mtproto_upload', handle_mtproto_upload)
+        logger.info("✅ MTProto upload handler registered")
+
 
 def log_startup():
     """Log startup information."""
@@ -114,6 +121,15 @@ async def main():
         # Verify cookies on startup
         cookie_manager.verify_on_startup()
 
+        # Connect MTProto client if enabled
+        if os.getenv("MPROTO", "false").lower() == "true":
+            from worker.mtproto_client import mtproto
+            try:
+                await mtproto.connect()
+                logger.info("✅ MTProto client connected")
+            except Exception as e:
+                logger.error(f"⚠️ MTProto connect failed — large file uploads will fall back: {e}")
+
         # Setup handlers
         setup_handlers()
 
@@ -128,7 +144,14 @@ async def main():
         logger.critical(f"Fatal error: {e}", exc_info=True)
         sys.exit(1)
     finally:
-        # Cleanup
+        # Cleanup MTProto
+        if os.getenv("MPROTO", "false").lower() == "true":
+            try:
+                from worker.mtproto_client import mtproto
+                await mtproto.disconnect()
+            except Exception:
+                pass
+        # Cleanup database
         await close_database()
 
 

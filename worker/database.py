@@ -58,6 +58,7 @@ class Database:
             ("0004_cache_tables", self._migration_0004_cache_tables()),
             ("0005_rate_limiting", self._migration_0005_rate_limiting()),
             ("0006_symlink_tracking", self._migration_0006_symlink_tracking()),
+            ("0007_mtproto_cache", self._migration_0007_mtproto_cache()),
         ]
 
         failures = 0
@@ -396,6 +397,54 @@ class Database:
         CREATE INDEX IF NOT EXISTS idx_user_symlinks_path ON user_symlinks(symlink_path);
         """
 
+
+    @staticmethod
+    def _migration_0007_mtproto_cache() -> str:
+        """File cache for MTProto channel uploads (SHA256 keyed)."""
+        return """
+        CREATE TABLE IF NOT EXISTS file_cache (
+            id             INTEGER PRIMARY KEY AUTOINCREMENT,
+            file_hash      TEXT    NOT NULL UNIQUE,
+            file_path      TEXT    NOT NULL,
+            channel_msg_id INTEGER NOT NULL,
+            file_size      INTEGER NOT NULL,
+            uploaded_at    DATETIME DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE INDEX IF NOT EXISTS idx_file_cache_hash ON file_cache(file_hash);
+        """
+
+    async def get_cached_channel_msg(self, file_hash: str) -> Optional[int]:
+        """Return cached channel_msg_id for file_hash, or None if not cached."""
+        try:
+            row = await self.fetch_one(
+                "SELECT channel_msg_id FROM file_cache WHERE file_hash = ?",
+                (file_hash,)
+            )
+            return row["channel_msg_id"] if row else None
+        except Exception as e:
+            logger.warning(f"Cache lookup failed: {e}")
+            return None
+
+    async def cache_channel_msg(
+        self,
+        file_hash:      str,
+        file_path:      str,
+        channel_msg_id: int,
+        file_size:      int,
+    ) -> None:
+        """Store channel_msg_id for a file so future uploads are skipped."""
+        try:
+            await self.execute(
+                """
+                INSERT OR REPLACE INTO file_cache
+                    (file_hash, file_path, channel_msg_id, file_size)
+                VALUES (?, ?, ?, ?)
+                """,
+                (file_hash, file_path, channel_msg_id, file_size),
+            )
+            await self.connection.commit()
+        except Exception as e:
+            logger.error(f"Cache write failed: {e}")
 
     async def create_user_preference(self, user_chat_id: int, dedup_enabled: bool = True) -> None:
         """Initialize user deduplication preferences."""

@@ -29,6 +29,7 @@ pub enum IPCAction {
     CacheCleanup,
     CacheStats,
     HealthCheck,
+    MtprotoUpload,    // Upload large file to storage channel via MTProto
 }
 
 impl std::fmt::Display for IPCAction {
@@ -274,6 +275,21 @@ pub fn download_request_with_format(
     IPCRequest::new(task_id, IPCAction::YoutubeDl)
         .with_url(url)
         .with_params(params)
+}
+
+/// Build an MTProto upload request (large file → storage channel).
+pub fn mtproto_upload_request(
+    task_id:   &str,
+    file_path: &str,
+    chat_id:   i64,
+    filename:  &str,
+) -> IPCRequest {
+    IPCRequest::new(task_id, IPCAction::MtprotoUpload)
+        .with_params(serde_json::json!({
+            "file_path": file_path,
+            "chat_id":   chat_id,
+            "filename":  filename,
+        }))
 }
 
 #[cfg(test)]

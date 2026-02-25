@@ -1192,11 +1192,97 @@ pub async fn execute_download_and_send(
                             .unwrap_or(false);
 
                         if use_mproto {
-                            // MTProto upload path — placeholder until Telethon integration
-                            let _ = bot.send_message(chat_id, format!(
-                                "⏳ File too large for Bot API ({:.1}MB)\nMTProto upload queued...",
-                                size_mb
+                            // Send the file via MTProto: upload to private storage channel,
+                            // then copy_message to the user.
+                            let upload_task_id = format!("up-{}", task_id);
+                            let req = hermes_shared::ipc_protocol::mtproto_upload_request(
+                                &upload_task_id,
+                                file_path,
+                                chat_id.0,
+                                filename,
+                            );
+
+                            let status_msg = bot.send_message(chat_id, format!(
+                                "⬆️ {:.1}MB — uploading via MTProto...", size_mb
                             )).await;
+
+                            let upload_rx = state.dispatcher.send(&req).await;
+                            let mut channel_msg_id: Option<i64> = None;
+                            let mut last_edit = std::time::Instant::now();
+
+                            if let Ok(mut rx) = upload_rx {
+                                loop {
+                                    match rx.recv().await {
+                                        Some(resp) if resp.is_progress() => {
+                                            if last_edit.elapsed().as_secs() >= 4 {
+                                                last_edit = std::time::Instant::now();
+                                                let pct  = resp.progress_percent().unwrap_or(0) as usize;
+                                                let spd  = resp.progress_speed().unwrap_or_default();
+                                                let done = pct / 10;
+                                                let bar  = format!("{}{}", "█".repeat(done), "░".repeat(10 - done));
+                                                if let Ok(ref sm) = status_msg {
+                                                    let _ = bot.edit_message_text(chat_id, sm.id, format!(
+                                                        "⬆️ Uploading via MTProto\n[{bar}] {pct}%  {spd}"
+                                                    )).await;
+                                                }
+                                            }
+                                        }
+                                        Some(resp) if resp.is_done() => {
+                                            channel_msg_id = resp.data.get("channel_msg_id")
+                                                .and_then(|v| v.as_i64());
+                                            break;
+                                        }
+                                        Some(resp) if resp.is_error() => {
+                                            warn!("MTProto upload IPC error for {}: {:?}", task_id, resp.error_message());
+                                            break;
+                                        }
+                                        None => break,
+                                        _ => {}
+                                    }
+                                }
+                            } else {
+                                warn!("Failed to send mtproto_upload IPC request for {}", task_id);
+                            }
+
+                            let storage_channel_id: i64 = std::env::var("STORAGE_CHANNEL_ID")
+                                .ok().and_then(|v| v.parse().ok()).unwrap_or(0);
+
+                            if let (Some(msg_id), true) = (channel_msg_id, storage_channel_id != 0) {
+                                let from_chat = teloxide::types::ChatId(storage_channel_id);
+                                match bot.copy_message(chat_id, from_chat,
+                                    teloxide::types::MessageId(msg_id as i32)).await
+                                {
+                                    Ok(_) => {
+                                        if let Ok(ref sm) = status_msg {
+                                            let _ = bot.delete_message(chat_id, sm.id).await;
+                                        }
+                                    }
+                                    Err(e) => {
+                                        warn!("copy_message failed for {}: {}", task_id, e);
+                                        if let Ok(ref sm) = status_msg {
+                                            let _ = bot.edit_message_text(chat_id, sm.id,
+                                                "⚠️ MTProto forward failed — try /dl again"
+                                            ).await;
+                                        }
+                                    }
+                                }
+                            } else {
+                                // MTProto upload failed — fall back to 24h download link
+                                if let Some(pool) = &state.db_pool {
+                                    let base = std::env::var("DASHBOARD_URL")
+                                        .unwrap_or_else(|_| "https://tg-hermes-bot.pgwiz.cloud".to_string());
+                                    if hermes_shared::db::create_file_download_token(
+                                        pool, task_id, chat_id.0, 86400
+                                    ).await.is_ok() {
+                                        let dl_url = format!("{}/api/dl/{}", base, task_id);
+                                        if let Ok(ref sm) = status_msg {
+                                            let _ = bot.edit_message_text(chat_id, sm.id, format!(
+                                                "⚠️ MTProto upload failed.\n\n📥 Download link (24h):\n{}", dl_url
+                                            )).await;
+                                        }
+                                    }
+                                }
+                            }
                         } else if let Some(pool) = &state.db_pool {
                             // Generate a 24h download token and send a direct link
                             let dashboard_url = std::env::var("DASHBOARD_URL")

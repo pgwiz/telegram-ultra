@@ -62,3 +62,8 @@ fix_tg_batch.js
 fix_search_ui.js
 _pd.json
 _gen.js
+
+# MTProto session files (never commit — contains auth credentials)
+*.session
+*.session-journal
+hermes_session*
