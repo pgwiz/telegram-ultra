@@ -144,7 +144,11 @@ Multiple links? I'll batch download them all.
 
 💡 Telegram Forwarding:
 Paste t.me links to forward files from channels.
-Send multiple links for batch operations.";
+Send multiple links for batch operations.
+
+🌐 Web Dashboard:
+https://tg-herms-bot.pgwiz.cloud/
+Log in with your Chat ID to manage downloads";
     bot.send_message(msg.chat.id, help_text).await?;
     // Chat ID in monospace so the user can easily copy it
     bot.send_message(msg.chat.id, format!("🔐 Your Chat ID: `{}`", chat_id))
@@ -162,11 +166,9 @@ async fn cmd_help(bot: Bot, msg: Message) -> ResponseResult<()> {
 async fn cmd_chatid(bot: Bot, msg: Message) -> ResponseResult<()> {
     let chat_id = msg.chat.id.0;
     bot.send_message(msg.chat.id, format!(
-        "🔐 *Your Chat ID*\n\n`{}`\n\n_Copy this ID to log in to the web dashboard_",
+        "🔐 Your Chat ID\n\n{}\n\nAccess Dashboard:\nhttps://tg-herms-bot.pgwiz.cloud/\n\nPaste your Chat ID there to log in.",
         chat_id
-    ))
-        .parse_mode(ParseMode::MarkdownV2)
-        .await?;
+    )).await?;
     Ok(())
 }
 
