@@ -1224,7 +1224,10 @@ pub async fn execute_download_and_send(
                                     tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
                                 }
                             } else {
-                                warn!("[{short_id}] File not found: {}", file_path);
+                                warn!("[{short_id}] File not found (path={}, name={}). Current dir: {:?}",
+                                    file_path, file_name,
+                                    std::env::current_dir().ok()
+                                );
                             }
                         }
 
