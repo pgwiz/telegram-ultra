@@ -272,12 +272,6 @@ async def _download_playlist_tracks(ipc: IPCHandler, task_id: str, url: str, out
         if extract_audio:
             command.extend(['-x', '--audio-format', audio_format, '--audio-quality', '0'])
 
-        # Archive file for deduplication (skip already-downloaded tracks on re-run)
-        archive_path = params.get('archive_file')
-        if archive_path:
-            safe_mkdir(os.path.dirname(archive_path))
-            command.extend(['--download-archive', archive_path])
-
         # Output template - use playlist_index to preserve original YouTube track numbers
         output_template = os.path.join(output_dir, '%(playlist_index)03d - %(title)s.%(ext)s')
         command.extend(['-o', output_template])
@@ -289,6 +283,17 @@ async def _download_playlist_tracks(ipc: IPCHandler, task_id: str, url: str, out
         # android client doesn't support cookies — use web-only when cookies are present
         player_clients = 'web' if cookie_args else 'android,web'
         command.extend(['--extractor-args', f'youtube:player_client={player_clients}'])
+
+        # Archive file for deduplication (skip already-downloaded tracks on re-run)
+        # Note: Disable archive for Radio Mixes since they're infinite and we want playlist_end to work
+        archive_path = params.get('archive_file')
+        is_radio_mix = 'list=RD' in url
+        if archive_path and not is_radio_mix:
+            safe_mkdir(os.path.dirname(archive_path))
+            command.extend(['--download-archive', archive_path])
+            logger.info(f"[{task_id}] Using archive file: {archive_path}")
+        elif is_radio_mix:
+            logger.info(f"[{task_id}] Skipping archive for Radio Mix (need exact track count)")
 
         # JS runtime for signature/n-challenge solving
         node_bin = find_node_binary()
