@@ -1,0 +1,21 @@
+tree 7a46177551982ab37fea54ba88ef56b532bf2798
+parent b300c3e8c147792c249d32f44dd2f0fa498e5fb5
+author pgwiz <pgwiz@users.noreply.github.com> 1771879410 +0300
+committer pgwiz <pgwiz@users.noreply.github.com> 1771879410 +0300
+
+fix: use merge format selector for video downloads
+
+Modern YouTube delivers video and audio as separate streams — the
+old default 'best[ext=mp4]/best' only matches combined streams which
+are rarely available, causing 'Requested format is not available'.
+
+New default cascades through:
+  1. bestvideo[<=720p mp4] + bestaudio[m4a]  (clean mp4 merge)
+  2. bestvideo[<=720p] + bestaudio           (any codec, merged to mp4)
+  3. bestvideo + bestaudio                   (uncapped, merged to mp4)
+  4. best                                    (combined stream fallback)
+
+The --merge-output-format mp4 flag is added whenever the format
+string contains '+' (always true for the default).
+
+Co-Authored-By: pgwiz <pgwiz@users.noreply.github.com>
