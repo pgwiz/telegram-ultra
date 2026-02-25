@@ -368,37 +368,39 @@ async def _download_playlist_tracks(ipc: IPCHandler, task_id: str, url: str, out
                         downloaded_files.append(filepath)
 
         # Process files through deduplication system if enabled
-        if database and user_chat_id and downloaded_files:
-            try:
-                # Check if user has dedup enabled
-                use_dedup = await database.get_user_dedup_preference(user_chat_id)
-
-                if use_dedup:
-                    logger.info(f"[{task_id}] Processing {len(downloaded_files)} files through dedup system")
-                    storage_manager = StorageManager(params.get('output_dir', config.DOWNLOAD_DIR))
-                    final_paths = []
-
-                    for temp_file in downloaded_files:
-                        try:
-                            # Move/symlink file to final location
-                            # File is already in user_output_dir, so target_path = temp_file
-                            success, final_path = await storage_manager.store_or_link(
-                                source_file=temp_file,
-                                target_path=temp_file,
-                                database=database,
-                                user_chat_id=user_chat_id,
-                                use_symlink=True
-                            )
-                            if success:
-                                final_paths.append(final_path)
-                        except Exception as e:
-                            logger.error(f"[{task_id}] Failed to process file through dedup: {e}")
-                            # Fall back to using original file
-                            final_paths.append(temp_file)
-
-                    return sorted(final_paths)
-            except Exception as e:
-                logger.error(f"[{task_id}] Dedup processing failed, using original files: {e}")
+        # TODO: Dedup processing disabled temporarily - SHA-1 hashing was blocking for 5+ min
+        # Re-enable after optimization: run hashing in parallel/async, non-blocking
+        # if database and user_chat_id and downloaded_files:
+        #     try:
+        #         # Check if user has dedup enabled
+        #         use_dedup = await database.get_user_dedup_preference(user_chat_id)
+        #
+        #         if use_dedup:
+        #             logger.info(f"[{task_id}] Processing {len(downloaded_files)} files through dedup system")
+        #             storage_manager = StorageManager(params.get('output_dir', config.DOWNLOAD_DIR))
+        #             final_paths = []
+        #
+        #             for temp_file in downloaded_files:
+        #                 try:
+        #                     # Move/symlink file to final location
+        #                     # File is already in user_output_dir, so target_path = temp_file
+        #                     success, final_path = await storage_manager.store_or_link(
+        #                         source_file=temp_file,
+        #                         target_path=temp_file,
+        #                         database=database,
+        #                         user_chat_id=user_chat_id,
+        #                         use_symlink=True
+        #                     )
+        #                     if success:
+        #                         final_paths.append(final_path)
+        #                 except Exception as e:
+        #                     logger.error(f"[{task_id}] Failed to process file through dedup: {e}")
+        #                     # Fall back to using original file
+        #                     final_paths.append(temp_file)
+        #
+        #             return sorted(final_paths)
+        #     except Exception as e:
+        #         logger.error(f"[{task_id}] Dedup processing failed, using original files: {e}")
 
         return sorted(downloaded_files)
 

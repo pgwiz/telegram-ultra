@@ -797,22 +797,18 @@ pub async fn handle_callback_query(
         let format_msg_text = format!("Downloading {} — choose format:", limit_label);
         let keyboard = InlineKeyboardMarkup::new(buttons);
 
-        // Try to edit the existing message
-        let edit_result = bot.edit_message_text(chat_id, msg_id, format_msg_text.clone())
-            .reply_markup(keyboard.clone())
+        // Send new message instead of trying to edit
+        // (Telegram sometimes blocks editing certain message types)
+        let new_msg = bot.send_message(chat_id, format_msg_text)
+            .reply_markup(keyboard)
             .await;
 
-        match edit_result {
-            Ok(_) => info!("Successfully updated playlist format selection message"),
-            Err(e) => {
-                error!("Failed to edit playlist limit message: {}", e);
-                // Fallback: send new message instead of editing
-                let _ = bot.send_message(chat_id, format_msg_text)
-                    .reply_markup(keyboard)
-                    .await;
-                // Try to delete the old message (ignore errors)
-                let _ = bot.delete_message(chat_id, msg_id).await;
-            }
+        // If we successfully sent a new message, try to delete the old one
+        if new_msg.is_ok() {
+            let _ = bot.delete_message(chat_id, msg_id).await;
+            info!("Sent format selection message (replaced limit selection message)");
+        } else {
+            error!("Failed to send format selection message: {:?}", new_msg);
         }
         return Ok(());
     }
