@@ -213,14 +213,17 @@ async fn cmd_allow(
                     bot.send_message(
                         msg.chat.id,
                         format!(
-                            "✅ Quick Login Window Opened\n\n⏱️ Duration: {} seconds\n\n🔓 Direct Access Link:\n{}\n\n⚠️ This is for emergency access only. Use with caution.",
-                            secs, dashboard_url
+                            "✅ Quick Login Window Opened\n\n⏱️ Duration: {} seconds\n\n📋 Your Chat ID:\n{}\n\n🔗 Direct Access Link:\n{}\n\n📝 Steps:\n1. Copy your Chat ID above\n2. Click the dashboard link\n3. If prompted, paste your Chat ID\n\n⚠️ This is for emergency access only. Use with caution.",
+                            secs, admin_id, dashboard_url
                         ),
                     ).await?;
                 } else {
                     bot.send_message(
                         msg.chat.id,
-                        format!("✅ Quick Login Window Opened\n\n⏱️ Duration: {} seconds\n\n🔓 Anyone with your Chat ID can now log in without OTP.\n\n⚠️ This is for emergency access only. Use with caution.", secs),
+                        format!(
+                            "✅ Quick Login Window Opened\n\n⏱️ Duration: {} seconds\n\n📋 Your Chat ID:\n{}\n\n🔓 Anyone with this Chat ID can now log in without OTP.\n\n📝 Steps:\n1. Copy your Chat ID above\n2. Go to: https://tg-herms-bot.pgwiz.cloud/\n3. Paste Chat ID to log in\n\n⚠️ This is for emergency access only. Use with caution.",
+                            secs, admin_id
+                        ),
                     ).await?;
                 }
             }
