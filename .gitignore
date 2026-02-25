@@ -43,6 +43,9 @@ nul
 *.swp
 *.swo
 
+# Git
+.git-rewrite/
+
 # Misc
 Hermes_Implementation_Plan.docx
 SETUP_NOTES.txt

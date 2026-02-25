@@ -99,6 +99,7 @@ async def handle_playlist_download(ipc: IPCHandler, task_id: str, request: dict)
 
         # Normalize Radio Mix URLs (list=RD...) before passing to yt-dlp
         url = normalize_playlist_url(url)
+        logger.info(f"[{task_id}] Normalized URL: {url}")
 
         logger.info(f"[{task_id}] Starting playlist download: {url[:50]}...")
         ipc.send_progress(task_id, 0, status='preparing')
