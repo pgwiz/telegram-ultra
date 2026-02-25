@@ -1248,6 +1248,37 @@ async fn cmd_playlist_preview(
         return Ok(());
     }
 
+    // Check if this is a Radio Mix (list=RD pattern)
+    // Radio Mixes are infinite and slow to preview, so skip to track selection
+    if url.contains("list=RD") {
+        let key = format!("{:x}", chrono::Utc::now().timestamp_millis());
+        state.playlist_store.store(key.clone(), PlaylistPending {
+            url: url.to_string(),
+            chat_id: msg.chat.id.0,
+            message_id: msg.id,
+            is_single: false,
+            limit: Some(10),
+            created_at: std::time::Instant::now(),
+        }).await;
+
+        // For Radio Mixes, go straight to track limit selection (skip preview)
+        let buttons = vec![
+            vec![
+                InlineKeyboardButton::callback("🎵 10 tracks",  encode_playlist_limit(&key, 10)),
+                InlineKeyboardButton::callback("🎵 25 tracks",  encode_playlist_limit(&key, 25)),
+            ],
+            vec![
+                InlineKeyboardButton::callback("🎵 50 tracks",  encode_playlist_limit(&key, 50)),
+                InlineKeyboardButton::callback("🎵 All tracks", encode_playlist_limit(&key, 0)),
+            ],
+        ];
+        bot.send_message(msg.chat.id, "🎵 Radio Mix detected\n\n(Infinite playlist \\- skipping preview)\n\nHow many tracks to download?")
+            .parse_mode(ParseMode::MarkdownV2)
+            .reply_markup(InlineKeyboardMarkup::new(buttons))
+            .await?;
+        return Ok(());
+    }
+
     let task_id = uuid::Uuid::new_v4().to_string();
     let status = bot.send_message(msg.chat.id, "🎵 Fetching playlist info...").await?;
 
@@ -1292,7 +1323,7 @@ async fn cmd_playlist_preview(
                     if count > 0 {
                         msg_text.push_str(&format!("📊 {} tracks total\n\n", count));
                     } else {
-                        msg_text.push_str("📊 Total tracks: Unknown (infinite or uncountable playlist)\n\n");
+                        msg_text.push_str("📊 Total tracks: Unknown \\(infinite or uncountable playlist\\)\n\n");
                     }
 
                     // Show first few tracks
