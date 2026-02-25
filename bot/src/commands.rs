@@ -1218,7 +1218,7 @@ async fn cmd_playlist_preview(
 
     let url = url.trim().to_string();
     if url.is_empty() {
-        bot.send_message(msg.chat.id, "🎵 *Download Playlist*\n\nUsage: `/playlist <url>`\n\nI'll show you a preview of the first few tracks, then you can choose:\n• How many tracks to download\n• Audio or video format\n\nExample:\n`/playlist https://www.youtube.com/playlist?list=...`")
+        bot.send_message(msg.chat.id, "🎵 *Download Playlist*\n\nUsage: `/playlist \\<url\\>`\n\nI'll show you a preview of the first few tracks, then you can choose:\n• How many tracks to download\n• Audio or video format\n\nExample:\n`/playlist https://www.youtube.com/playlist?list=...`")
             .parse_mode(ParseMode::MarkdownV2)
             .await?;
         return Ok(());
@@ -1274,7 +1274,7 @@ async fn cmd_playlist_preview(
                 InlineKeyboardButton::callback("🎵 All tracks", encode_playlist_limit(&key, 0)),
             ],
         ];
-        bot.send_message(msg.chat.id, "🎵 Radio Mix detected\n\n(Infinite playlist \\- skipping preview)\n\nHow many tracks to download?")
+        bot.send_message(msg.chat.id, "🎵 Radio Mix detected\n\n\\(Infinite playlist \\- skipping preview\\)\n\nHow many tracks to download?")
             .parse_mode(ParseMode::MarkdownV2)
             .reply_markup(InlineKeyboardMarkup::new(buttons))
             .await?;
@@ -1319,7 +1319,8 @@ async fn cmd_playlist_preview(
                         .unwrap_or(&empty_vec);
 
                     // Format message
-                    let mut msg_text = format!("🎵 **{}**\n\n", title);
+                    let safe_title = escape_markdown_v2(title);
+                    let mut msg_text = format!("🎵 **{}**\n\n", safe_title);
 
                     // Show track count or note if unknown (infinite playlists)
                     if count > 0 {
@@ -1336,7 +1337,8 @@ async fn cmd_playlist_preview(
                                 track_obj.get("index").and_then(|v| v.as_u64()),
                                 track_obj.get("title").and_then(|v| v.as_str()),
                             ) {
-                                msg_text.push_str(&format!("{}\\. {}\n", idx, track_title));
+                                let safe_track_title = escape_markdown_v2(track_title);
+                                msg_text.push_str(&format!("{}\\. {}\n", idx, safe_track_title));
                             }
                         }
                     }
@@ -1765,6 +1767,20 @@ pub async fn handle_message(
         }
     }
     Ok(())
+}
+
+/// Escape special characters for Telegram MarkdownV2.
+/// Required characters to escape: _ * [ ] ( ) ~ ` > # + - = | { } . !
+fn escape_markdown_v2(text: &str) -> String {
+    text.chars()
+        .map(|c| match c {
+            '_' | '*' | '[' | ']' | '(' | ')' | '~' | '`' | '>' | '#' | '+' | '-' | '=' | '|' | '{' | '}' | '.' | '!' => {
+                format!("\\{}", c)
+            }
+            '\\' => "\\\\".to_string(),
+            c => c.to_string(),
+        })
+        .collect()
 }
 
 /// Generate a simple text progress bar.
