@@ -764,6 +764,7 @@ pub async fn handle_callback_query(
         };
         let chat_id = ChatId(pending.chat_id);
         let msg_id  = pending.message_id;
+        info!("Edit parameters: chat_id={}, message_id={}", pending.chat_id, msg_id);
         let limit_label = if pl_limit == 0 {
             "all tracks".to_string()
         } else {
@@ -855,6 +856,7 @@ pub async fn handle_callback_query(
 
         let chat_id = match q.message { Some(ref m) => m.chat.id, None => return Ok(()) };
         let msg_id  = match q.message { Some(ref m) => m.id,      None => return Ok(()) };
+        info!("Callback query message: chat_id={}, message_id={}", chat_id, msg_id);
 
         // Create a new playlist store entry
         let key = format!("{:x}", chrono::Utc::now().timestamp_millis());
@@ -867,7 +869,7 @@ pub async fn handle_callback_query(
             limit: Some(10), // Default to 10 tracks
             created_at: std::time::Instant::now(),
         }).await;
-        info!("Stored playlist pending with default limit=10");
+        info!("Stored playlist pending: chat_id={}, message_id={}", chat_id.0, msg_id);
 
         // Show track limit selection
         let buttons = vec![
