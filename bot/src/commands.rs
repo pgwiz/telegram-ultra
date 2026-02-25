@@ -812,6 +812,42 @@ pub async fn handle_callback_query(
         return Ok(());
     }
 
+    // Handle playlist preview download (pl_dl:URL) — triggered from preview
+    if data.starts_with("pl_dl:") {
+        let _ = bot.answer_callback_query(&q.id).await;
+        let url = &data[6..]; // Extract URL after "pl_dl:"
+
+        let chat_id = match q.message { Some(ref m) => m.chat.id, None => return Ok(()) };
+        let msg_id  = match q.message { Some(ref m) => m.id,      None => return Ok(()) };
+
+        // Create a new playlist store entry
+        let key = format!("{:x}", chrono::Utc::now().timestamp_millis());
+        state.playlist_store.store(key.clone(), PlaylistPending {
+            url: url.to_string(),
+            chat_id: chat_id.0,
+            message_id: msg_id,
+            is_single: false, // This is a playlist, not a single video
+            limit: Some(10), // Default to 10 tracks
+            created_at: std::time::Instant::now(),
+        }).await;
+
+        // Show track limit selection
+        let buttons = vec![
+            vec![
+                InlineKeyboardButton::callback("10 tracks",  encode_playlist_limit(&key, 10)),
+                InlineKeyboardButton::callback("25 tracks",  encode_playlist_limit(&key, 25)),
+            ],
+            vec![
+                InlineKeyboardButton::callback("50 tracks",  encode_playlist_limit(&key, 50)),
+                InlineKeyboardButton::callback("All tracks", encode_playlist_limit(&key, 0)),
+            ],
+        ];
+        let _ = bot.edit_message_text(chat_id, msg_id, "How many tracks to download?")
+            .reply_markup(InlineKeyboardMarkup::new(buttons))
+            .await;
+        return Ok(());
+    }
+
     let (mode_prefix, key, index) = match decode_callback(&data) {
         Some(decoded) => decoded,
         None => {
