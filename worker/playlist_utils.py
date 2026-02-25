@@ -113,7 +113,16 @@ async def get_playlist_preview(url: str, preview_count: int = 5) -> Optional[Dic
         # Parse title and count from first line
         title_line = lines[0].split('|')
         playlist_title = title_line[0] if title_line else 'Playlist'
-        playlist_count = int(title_line[1]) if len(title_line) > 1 else 0
+
+        # Handle playlist_count which can be 'NA' if yt-dlp can't determine it
+        playlist_count = 0
+        if len(title_line) > 1:
+            count_str = title_line[1].strip()
+            try:
+                playlist_count = int(count_str) if count_str and count_str != 'NA' else 0
+            except ValueError:
+                playlist_count = 0
+                logger.warning(f"Could not parse playlist count: {count_str}")
 
         # Parse track list (index\ttitle format)
         tracks = []
