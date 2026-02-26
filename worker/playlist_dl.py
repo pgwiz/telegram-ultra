@@ -127,6 +127,44 @@ async def handle_playlist_download(ipc: IPCHandler, task_id: str, request: dict)
 
         logger.info(f"[{task_id}] Playlist: '{playlist_name}' ({total_tracks} tracks)")
 
+        # Pre-scan: check flat playlist entries against archive to report skipped/cached tracks
+        entries = playlist_info.get('entries', [])
+        archive_path = params.get('archive_file')
+        skipped_count = 0
+
+        if archive_path and os.path.exists(archive_path) and entries:
+            archived_ids = set()
+            try:
+                with open(archive_path, 'r') as f:
+                    for line in f:
+                        parts = line.strip().split()
+                        if len(parts) >= 2:
+                            archived_ids.add(parts[1])  # "youtube VIDEO_ID"
+            except OSError as e:
+                logger.warning(f"[{task_id}] Could not read archive: {e}")
+
+            for entry in entries:
+                if entry.get('id', '') in archived_ids:
+                    skipped_count += 1
+
+            if skipped_count:
+                logger.info(f"[{task_id}] Pre-scan: {skipped_count}/{len(entries)} tracks already in archive")
+                ipc.send_progress(task_id, 5, status=f'pre_scan:{skipped_count}_cached')
+
+        # Short-circuit: all requested tracks are already downloaded
+        playlist_end = params.get('playlist_end')
+        effective_count = min(len(entries), playlist_end) if (playlist_end and entries) else len(entries)
+        if entries and skipped_count >= effective_count:
+            logger.info(f"[{task_id}] All {skipped_count} tracks already cached, nothing to download")
+            ipc.send_response(task_id, 'done', {
+                'playlist_name': playlist_name,
+                'total_tracks_downloaded': 0,
+                'already_cached': skipped_count,
+                'files': [],
+                'folder_path': '',
+            })
+            return
+
         # Create output folder
         safe_folder_name = sanitize_folder_name(playlist_name)
         output_dir = os.path.join(params.get('output_dir', config.DOWNLOAD_DIR), safe_folder_name)
@@ -300,15 +338,11 @@ async def _download_playlist_tracks(ipc: IPCHandler, task_id: str, url: str, out
         command.extend(['--extractor-args', f'youtube:player_client={player_clients}'])
 
         # Archive file for deduplication (skip already-downloaded tracks on re-run)
-        # Note: Disable archive for Radio Mixes since they're infinite and we want playlist_end to work
         archive_path = params.get('archive_file')
-        is_radio_mix = 'list=RD' in url
-        if archive_path and not is_radio_mix:
+        if archive_path:
             safe_mkdir(os.path.dirname(archive_path))
             command.extend(['--download-archive', archive_path])
             logger.info(f"[{task_id}] Using archive file: {archive_path}")
-        elif is_radio_mix:
-            logger.info(f"[{task_id}] Skipping archive for Radio Mix (need exact track count)")
 
         # JS runtime for signature/n-challenge solving
         node_bin = find_node_binary()
@@ -385,7 +419,7 @@ async def _download_playlist_tracks(ipc: IPCHandler, task_id: str, url: str, out
                 user_cid = params.get('user_chat_id', 0)
                 if user_cid:
                     logger.info(f"[{task_id}] Processing {len(downloaded_files)} files through dedup system")
-                    storage_manager = StorageManager(params.get('output_dir', config.DOWNLOAD_DIR))
+                    storage_manager = StorageManager(config.DOWNLOAD_DIR)
                     final_paths = []
                     for temp_file in downloaded_files:
                         try:

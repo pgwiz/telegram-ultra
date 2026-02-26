@@ -279,7 +279,7 @@ async def _execute_download(ipc: IPCHandler, task_id: str, command: list, output
                 from worker.database import get_database
                 db = await get_database()
                 user_chat_id = (params or {}).get('user_chat_id', 0)
-                storage = StorageManager((params or {}).get('output_dir', config.DOWNLOAD_DIR))
+                storage = StorageManager(config.DOWNLOAD_DIR)
                 success, final_path = await storage.store_or_link(
                     source_file=final_file,
                     target_path=final_file,
