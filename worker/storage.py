@@ -123,8 +123,8 @@ class StorageManager:
             if pool_file.exists():
                 logger.info(f"File already in pool: {file_hash}")
 
-                # Update youtube_url if caller provides a specific video URL
-                # (fixes old entries that stored a playlist URL instead of individual video URL)
+                # Update youtube_url/title if caller provides better values
+                # (fixes old entries that stored a playlist URL or "unknown" title)
                 if youtube_url and 'watch?v=' in youtube_url and 'list=' not in youtube_url:
                     try:
                         await database.execute(
@@ -134,17 +134,27 @@ class StorageManager:
                         await database.connection.commit()
                     except Exception as e:
                         logger.debug(f"Failed to update youtube_url for {file_hash}: {e}")
+                if title and title != "unknown":
+                    try:
+                        await database.execute(
+                            'UPDATE file_storage SET title = ? WHERE file_hash_sha1 = ? AND (title IS NULL OR title = ? OR title = ?)',
+                            [title, file_hash, '', 'unknown']
+                        )
+                        await database.connection.commit()
+                    except Exception as e:
+                        logger.debug(f"Failed to update title for {file_hash}: {e}")
 
                 if use_symlink:
                     # Create symlink to existing file
                     await self._create_symlink(
                         pool_file, target_path, file_hash, database, user_chat_id
                     )
-                    # Clean up source file
-                    try:
-                        os.remove(source_file)
-                    except Exception as e:
-                        logger.warning(f"Failed to remove temp source file: {e}")
+                    # Clean up source file (but NOT if source == target, as symlink was just created there)
+                    if os.path.normpath(source_file) != os.path.normpath(target_path):
+                        try:
+                            os.remove(source_file)
+                        except Exception as e:
+                            logger.warning(f"Failed to remove temp source file: {e}")
                     return True, target_path
                 else:
                     # Copy instead of symlink (user opted out of dedup)

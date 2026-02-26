@@ -257,7 +257,9 @@ async def handle_playlist_download(ipc: IPCHandler, task_id: str, request: dict)
                         )
                         row = await cursor.fetchone()
                         if row and row[0] and os.path.exists(row[0]):
-                            cached_files.append({'path': row[0], 'title': row[1] or entry.get('title', '')})
+                            db_title = row[1] if row[1] and row[1] != 'unknown' else ''
+                            entry_title = entry.get('title', '')
+                            cached_files.append({'path': row[0], 'title': db_title or entry_title})
                             logger.info(f"[{task_id}] Cached track found: {vid_id} -> {row[0]}")
                         else:
                             # Pool file not findable by video ID — remove from archive
@@ -675,12 +677,16 @@ async def _download_playlist_tracks(ipc: IPCHandler, task_id: str, url: str, out
                                 )
                                 track_url = f"https://www.youtube.com/watch?v={video_id}" if video_id else url
 
+                            # Extract title from filename (e.g. "Artist - Song Name.mp3" → "Artist - Song Name")
+                            track_title = os.path.splitext(os.path.basename(temp_file))[0]
+
                             success, final_path = await storage_manager.store_or_link(
                                 source_file=temp_file,
                                 target_path=temp_file,
                                 database=db,
                                 user_chat_id=user_cid,
                                 youtube_url=track_url,
+                                title=track_title,
                                 use_symlink=True,
                             )
                             final_paths.append(final_path if success else temp_file)
