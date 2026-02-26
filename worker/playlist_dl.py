@@ -38,24 +38,40 @@ def normalize_playlist_url(url: str) -> str:
     Normalize YouTube playlist URLs for yt-dlp compatibility.
 
     Radio Mix URLs (list=RD...) expire when used as a plain playlist URL.
-    They must include the seed video + start_radio=1 to work reliably.
+    They MUST be in the form: watch?v={seed}&list=RD{seed}&start_radio=1
+
+    Handles:
+      watch?v=X&list=RDY           → watch?v=X&list=RDX&start_radio=1  (fix truncated list ID)
+      playlist?list=RDX            → watch?v=X&list=RDX&start_radio=1  (fix broken playlist form)
+      watch?v=X&list=RDX&start_radio=1  → unchanged (already correct)
     """
-    # First, extract the actual video ID from v= parameter (not from list ID)
+    radio_match = re.search(r'list=(RD([a-zA-Z0-9_-]+))', url)
+    if not radio_match:
+        return url
+
+    list_id = radio_match.group(1)    # e.g. RDEgBJmlPo8Xw or RDEgBJmlPo
+    list_suffix = radio_match.group(2)  # e.g. EgBJmlPo8Xw or EgBJmlPo
+
+    # Preserve special Radio Mix types (My Mix, Artist Mix, Album Radio)
+    if list_id.startswith(('RDMM', 'RDAM', 'RDCLAK')):
+        return url
+
+    # Determine the seed video ID:
+    # 1. Prefer the v= parameter (always 11 chars, most reliable)
+    # 2. Fall back to stripping RD prefix from list ID (only if 11 chars)
     video_match = re.search(r'v=([a-zA-Z0-9_-]{11})', url)
-    radio_match = re.search(r'list=(RD[a-zA-Z0-9_-]+)', url)
+    if video_match:
+        video_id = video_match.group(1)
+    elif len(list_suffix) == 11:
+        video_id = list_suffix
+    else:
+        return url  # Can't determine seed video, return as-is
 
-    if radio_match and video_match:
-        list_id = radio_match.group(1)      # e.g. RDEgBJmlPo8Xw
-        video_id = video_match.group(1)     # e.g. EgBJmlPo8Xw (from v= parameter)
-
-        if 'start_radio=1' in url:
-            return url  # Already normalized
-
-        return (
-            f"https://www.youtube.com/watch?v={video_id}"
-            f"&list={list_id}&start_radio=1"
-        )
-    return url
+    # Always reconstruct: full video ID in both v= and list=
+    return (
+        f"https://www.youtube.com/watch?v={video_id}"
+        f"&list=RD{video_id}&start_radio=1"
+    )
 
 
 async def _validate_archive(archive_path: str, task_id: str) -> int:
