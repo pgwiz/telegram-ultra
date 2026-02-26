@@ -168,6 +168,7 @@ pub fn download_request(
     url: &str,
     extract_audio: bool,
     output_dir: &str,
+    user_chat_id: i64,
 ) -> IPCRequest {
     IPCRequest::new(task_id, IPCAction::YoutubeDl)
         .with_url(url)
@@ -176,11 +177,12 @@ pub fn download_request(
             "audio_format": "mp3",
             "audio_quality": "0",
             "output_dir": output_dir,
+            "user_chat_id": user_chat_id,
         }))
 }
 
 /// Build a playlist download request.
-pub fn playlist_request(task_id: &str, url: &str, output_dir: &str) -> IPCRequest {
+pub fn playlist_request(task_id: &str, url: &str, output_dir: &str, user_chat_id: i64) -> IPCRequest {
     IPCRequest::new(task_id, IPCAction::Playlist)
         .with_url(url)
         .with_params(serde_json::json!({
@@ -188,6 +190,7 @@ pub fn playlist_request(task_id: &str, url: &str, output_dir: &str) -> IPCReques
             "audio_format": "mp3",
             "output_dir": output_dir,
             "archive_max_size_mb": 100,
+            "user_chat_id": user_chat_id,
         }))
 }
 
@@ -200,12 +203,14 @@ pub fn playlist_request_opts(
     max_items: Option<u32>,
     extract_audio: bool,
     archive_path: Option<&str>,
+    user_chat_id: i64,
 ) -> IPCRequest {
     let mut params = serde_json::json!({
         "extract_audio": extract_audio,
         "audio_format": if extract_audio { "mp3" } else { "mp4" },
         "output_dir": output_dir,
         "archive_max_size_mb": 100,
+        "user_chat_id": user_chat_id,
     });
     if let Some(n) = max_items {
         params["playlist_end"] = serde_json::json!(n);
@@ -260,11 +265,13 @@ pub fn download_request_with_format(
     audio_format: Option<&str>,
     audio_quality: Option<&str>,
     output_dir: &str,
+    user_chat_id: i64,
 ) -> IPCRequest {
     let mut params = serde_json::json!({
         "format": format_id,
         "extract_audio": extract_audio,
         "output_dir": output_dir,
+        "user_chat_id": user_chat_id,
     });
     if let Some(af) = audio_format {
         params["audio_format"] = serde_json::json!(af);

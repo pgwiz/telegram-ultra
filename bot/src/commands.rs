@@ -357,7 +357,7 @@ async fn cmd_download(
         return Ok(());
     }
 
-    let request = download_request(&task_id, link.url(), true, &out_dir);
+    let request = download_request(&task_id, link.url(), true, &out_dir, chat_id.0);
 
     // Spawn download in background so the teloxide handler returns immediately.
     // This prevents blocking all other commands for this chat during the download.
@@ -720,7 +720,7 @@ pub async fn handle_callback_query(
 
         let out_dir  = task_output_dir(&state.download_dir, chat_id.0, &task_id);
         let dl_mode  = if is_audio { DownloadMode::Audio } else { DownloadMode::Video };
-        let request  = download_request(&task_id, &url, is_audio, &out_dir);
+        let request  = download_request(&task_id, &url, is_audio, &out_dir, chat_id.0);
 
         let state2 = state.clone();
         tokio::spawn(async move {
@@ -868,7 +868,7 @@ pub async fn handle_callback_query(
 
         let (url, ipc_action, request) = if is_single {
             let single_url = extract_single_video_url(&pending.url);
-            let req = download_request(&task_id, &single_url, pf_is_audio, &out_dir);
+            let req = download_request(&task_id, &single_url, pf_is_audio, &out_dir, pending.chat_id);
             (single_url, "youtube_dl", req)
         } else {
             // Only use the archive when downloading all tracks (no limit).
@@ -881,7 +881,7 @@ pub async fn handle_callback_query(
             };
             info!("Playlist download: limit={:?}, url={}, is_audio={}, archive={:?}", pending.limit, &pending.url, pf_is_audio, archive_opt.is_some());
             let req = playlist_request_opts(
-                &task_id, &pending.url, &out_dir, pending.limit, pf_is_audio, archive_opt.as_deref(),
+                &task_id, &pending.url, &out_dir, pending.limit, pf_is_audio, archive_opt.as_deref(), pending.chat_id,
             );
             (pending.url.clone(), "playlist", req)
         };
@@ -1064,6 +1064,7 @@ pub async fn handle_callback_query(
         format.audio_format.as_deref(),
         format.audio_quality.as_deref(),
         &out_dir,
+        pending.chat_id,
     );
 
     // Enqueue task

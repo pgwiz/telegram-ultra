@@ -3,6 +3,7 @@ Storage Manager for Smart Track Deduplication System
 Handles file hashing, symlink creation, and central pool management
 """
 
+import asyncio
 import hashlib
 import os
 import json
@@ -40,6 +41,7 @@ class StorageManager:
     async def get_file_hash(self, file_path: str) -> str:
         """
         Calculate SHA-1 hash of file for content-based identification.
+        Runs in a thread pool to avoid blocking the async event loop.
 
         Args:
             file_path: Path to file to hash
@@ -47,6 +49,12 @@ class StorageManager:
         Returns:
             SHA-1 hexdigest
         """
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(None, self._hash_file_sync, file_path)
+
+    @staticmethod
+    def _hash_file_sync(file_path: str) -> str:
+        """Synchronous SHA-1 hash computation (called via executor)."""
         sha1 = hashlib.sha1()
         try:
             with open(file_path, 'rb') as f:

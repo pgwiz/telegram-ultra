@@ -128,7 +128,7 @@ async def handle_youtube_download(ipc: IPCHandler, task_id: str, request: dict) 
         logger.debug(f"[{task_id}] Command: {' '.join(command[:3])} ... (length: {len(command)})")
 
         # Execute download
-        await _execute_download(ipc, task_id, command, output_dir, extract_audio)
+        await _execute_download(ipc, task_id, command, output_dir, extract_audio, url, params)
 
     except Exception as e:
         error = categorize_error(e)
@@ -137,7 +137,7 @@ async def handle_youtube_download(ipc: IPCHandler, task_id: str, request: dict) 
 
 
 async def _execute_download(ipc: IPCHandler, task_id: str, command: list, output_dir: str,
-                           extract_audio: bool) -> None:
+                           extract_audio: bool, url: str = '', params: dict = None) -> None:
     """
     Execute yt-dlp subprocess with progress tracking.
 
@@ -147,6 +147,8 @@ async def _execute_download(ipc: IPCHandler, task_id: str, command: list, output
         command: yt-dlp command
         output_dir: Output directory
         extract_audio: Whether audio extraction is happening
+        url: Original YouTube URL (for dedup tracking)
+        params: IPC request params (contains user_chat_id, output_dir)
     """
     try:
         # Start subprocess
@@ -262,28 +264,45 @@ async def _execute_download(ipc: IPCHandler, task_id: str, command: list, output
 
         # Find downloaded file
         if destination_file and os.path.exists(destination_file):
-            file_size = os.path.getsize(destination_file)
-            logger.info(f"[{task_id}] Download completed: {os.path.basename(destination_file)} ({file_size} bytes)")
-
-            ipc.send_response(task_id, 'done', {
-                'file_path': destination_file,
-                'file_size': file_size,
-                'filename': os.path.basename(destination_file),
-            })
+            final_file = destination_file
         else:
             # Fallback: scan output directory for the newest matching file
-            found_file = _find_newest_media_file(output_dir)
-            if found_file:
-                file_size = os.path.getsize(found_file)
-                logger.info(f"[{task_id}] Download completed (fallback): {os.path.basename(found_file)} ({file_size} bytes)")
-                ipc.send_response(task_id, 'done', {
-                    'file_path': found_file,
-                    'file_size': file_size,
-                    'filename': os.path.basename(found_file),
-                })
-            else:
-                logger.error(f"[{task_id}] Downloaded file not found at {destination_file}")
-                ipc.send_error(task_id, "Downloaded file not found", 'FILE_NOT_FOUND')
+            final_file = _find_newest_media_file(output_dir)
+
+        if final_file:
+            file_size = os.path.getsize(final_file)
+            logger.info(f"[{task_id}] Download completed: {os.path.basename(final_file)} ({file_size} bytes)")
+
+            # Dedup: move file to central pool and create symlink
+            try:
+                from worker.storage import StorageManager
+                from worker.database import get_database
+                db = await get_database()
+                user_chat_id = (params or {}).get('user_chat_id', 0)
+                storage = StorageManager((params or {}).get('output_dir', config.DOWNLOAD_DIR))
+                success, final_path = await storage.store_or_link(
+                    source_file=final_file,
+                    target_path=final_file,
+                    database=db,
+                    user_chat_id=user_chat_id,
+                    youtube_url=url,
+                    title=os.path.splitext(os.path.basename(final_file))[0],
+                    use_symlink=True,
+                )
+                if success:
+                    final_file = final_path
+                    logger.info(f"[{task_id}] Dedup: stored in pool, serving via symlink")
+            except Exception as e:
+                logger.warning(f"[{task_id}] Dedup failed (using original): {e}")
+
+            ipc.send_response(task_id, 'done', {
+                'file_path': final_file,
+                'file_size': file_size,
+                'filename': os.path.basename(final_file),
+            })
+        else:
+            logger.error(f"[{task_id}] Downloaded file not found at {destination_file}")
+            ipc.send_error(task_id, "Downloaded file not found", 'FILE_NOT_FOUND')
 
     except Exception as e:
         error = categorize_error(e)

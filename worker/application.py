@@ -133,6 +133,12 @@ async def main():
         # Setup handlers
         setup_handlers()
 
+        # Start symlink repair service (maintenance only — does NOT delete pool files)
+        from worker.repair_service import SymlinkRepairService
+        repair_svc = SymlinkRepairService(config.DOWNLOAD_DIR, db, interval_seconds=3600)
+        asyncio.create_task(repair_svc.start())
+        logger.info("🔗 Symlink repair service started (hourly scan)")
+
         # Start IPC event loop
         logger.info("📡 Starting IPC listener (reading from stdin)")
         await ipc_handler.run()

@@ -300,7 +300,7 @@ async fn main() {
                                 &web_state.download_dir, task.chat_id, &task_id,
                             );
                             let request = download_request(
-                                &task_id, &url, !is_video, &out_dir,
+                                &task_id, &url, !is_video, &out_dir, task.chat_id,
                             );
 
                             // Enqueue in task queue
