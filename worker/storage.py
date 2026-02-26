@@ -123,6 +123,18 @@ class StorageManager:
             if pool_file.exists():
                 logger.info(f"File already in pool: {file_hash}")
 
+                # Update youtube_url if caller provides a specific video URL
+                # (fixes old entries that stored a playlist URL instead of individual video URL)
+                if youtube_url and 'watch?v=' in youtube_url and 'list=' not in youtube_url:
+                    try:
+                        await database.execute(
+                            'UPDATE file_storage SET youtube_url = ? WHERE file_hash_sha1 = ? AND youtube_url != ?',
+                            [youtube_url, file_hash, youtube_url]
+                        )
+                        await database.connection.commit()
+                    except Exception as e:
+                        logger.debug(f"Failed to update youtube_url for {file_hash}: {e}")
+
                 if use_symlink:
                     # Create symlink to existing file
                     await self._create_symlink(

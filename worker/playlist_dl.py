@@ -244,6 +244,7 @@ async def handle_playlist_download(ipc: IPCHandler, task_id: str, request: dict)
             db = await get_database()
             playlist_end = params.get('playlist_end')
             scan_entries = entries[:playlist_end] if playlist_end else entries
+            unfindable_ids = set()  # Track IDs we can't locate — will remove from archive
             for entry in scan_entries:
                 vid_id = entry.get('id', '')
                 if vid_id in archived_ids:
@@ -251,34 +252,59 @@ async def handle_playlist_download(ipc: IPCHandler, task_id: str, request: dict)
                     # Try to find existing pool file for this track
                     try:
                         cursor = await db.execute(
-                            'SELECT physical_path FROM file_storage WHERE youtube_url LIKE ?',
+                            'SELECT physical_path, title FROM file_storage WHERE youtube_url LIKE ?',
                             (f'%{vid_id}%',)
                         )
                         row = await cursor.fetchone()
                         if row and row[0] and os.path.exists(row[0]):
-                            cached_files.append(row[0])
+                            cached_files.append({'path': row[0], 'title': row[1] or entry.get('title', '')})
                             logger.info(f"[{task_id}] Cached track found: {vid_id} -> {row[0]}")
                         else:
-                            logger.info(f"[{task_id}] Cached track {vid_id}: in archive but pool file not in DB")
+                            # Pool file not findable by video ID — remove from archive
+                            # so yt-dlp re-downloads it (will get correct individual URL this time)
+                            unfindable_ids.add(vid_id)
+                            logger.info(f"[{task_id}] Cached track {vid_id}: not in DB, removing from archive for re-download")
                     except Exception as e:
                         logger.warning(f"[{task_id}] DB lookup failed for cached track {vid_id}: {e}")
 
+            # Remove unfindable entries from archive so yt-dlp re-downloads them
+            if unfindable_ids and archive_path:
+                skipped_count -= len(unfindable_ids)  # These are no longer "skipped"
+                try:
+                    with open(archive_path, 'r') as f:
+                        lines = f.readlines()
+                    kept = []
+                    for line in lines:
+                        parts = line.strip().split()
+                        if len(parts) >= 2 and parts[1] in unfindable_ids:
+                            continue  # Drop this entry
+                        kept.append(line)
+                    with open(archive_path, 'w') as f:
+                        f.writelines(kept)
+                    logger.info(f"[{task_id}] Removed {len(unfindable_ids)} unfindable entries from archive for re-download")
+                except OSError as e:
+                    logger.warning(f"[{task_id}] Failed to clean archive: {e}")
+
             if skipped_count:
-                logger.info(f"[{task_id}] Pre-scan: {skipped_count}/{len(entries)} in archive, {len(cached_files)} pool files found")
+                logger.info(f"[{task_id}] Pre-scan: {skipped_count}/{len(scan_entries)} in archive, {len(cached_files)} pool files found")
                 ipc.send_progress(task_id, 5, status=f'pre_scan:{skipped_count}_cached')
 
-        # Short-circuit: all requested tracks are already downloaded
+        # Short-circuit: all requested tracks are already downloaded AND we found all their files
         playlist_end = params.get('playlist_end')
         effective_count = min(len(entries), playlist_end) if (playlist_end and entries) else len(entries)
-        if entries and skipped_count >= effective_count and cached_files:
-            logger.info(f"[{task_id}] All {skipped_count} tracks already cached, sending {len(cached_files)} existing files")
+        if entries and skipped_count >= effective_count and len(cached_files) >= effective_count:
+            logger.info(f"[{task_id}] All {skipped_count} tracks already cached with files, sending {len(cached_files)} existing files")
             files = []
-            for fp in cached_files:
+            for cf in cached_files:
                 try:
+                    fp = cf['path']
+                    title = cf.get('title', '')
+                    file_ext = os.path.splitext(fp)[1] or '.mp3'
+                    display_name = f"{title}{file_ext}" if title else os.path.basename(fp)
                     file_size = os.path.getsize(fp)
                     files.append({
                         'path': fp,
-                        'name': os.path.basename(fp),
+                        'name': display_name,
                         'size_mb': round(file_size / (1024 * 1024), 2),
                         'cached': True,
                     })
@@ -310,47 +336,68 @@ async def handle_playlist_download(ipc: IPCHandler, task_id: str, request: dict)
         )
 
         # Merge cached files (from pre-scan) with newly downloaded files
-        all_files = list(cached_files)  # Start with cached pool files
+        cached_count = len(cached_files)
         new_count = len(downloaded_files) if downloaded_files else 0
-        if downloaded_files:
-            all_files.extend(downloaded_files)
 
-        if not all_files:
+        if not cached_files and not downloaded_files:
             ipc.send_error(task_id, "No tracks were downloaded and no cached files found")
             return
 
         # Log path confirmation for all files
-        logger.info(f"[{task_id}] File summary: {len(cached_files)} cached + {new_count} new = {len(all_files)} total")
-        for i, fp in enumerate(all_files):
-            source = "CACHED" if i < len(cached_files) else "NEW"
-            exists = os.path.exists(fp)
-            logger.info(f"[{task_id}]   [{source}] {os.path.basename(fp)} -> {fp} (exists={exists})")
+        logger.info(f"[{task_id}] File summary: {cached_count} cached + {new_count} new = {cached_count + new_count} total")
+        for cf in cached_files:
+            fp = cf['path']
+            logger.info(f"[{task_id}]   [CACHED] {cf.get('title', '?')} -> {fp} (exists={os.path.exists(fp)})")
+        if downloaded_files:
+            for fp in downloaded_files:
+                logger.info(f"[{task_id}]   [NEW] {os.path.basename(fp)} -> {fp} (exists={os.path.exists(fp)})")
 
         ipc.send_progress(task_id, 95, status='finalizing')
 
         # Return individual files instead of archives for easier sending to Telegram
         files = []
-        for i, file_path in enumerate(all_files):
+        # Add cached files with proper display names
+        for cf in cached_files:
             try:
-                if not os.path.exists(file_path):
-                    logger.warning(f"[{task_id}] File missing, skipping: {file_path}")
+                fp = cf['path']
+                if not os.path.exists(fp):
+                    logger.warning(f"[{task_id}] Cached file missing, skipping: {fp}")
                     continue
-                file_size = os.path.getsize(file_path)
+                title = cf.get('title', '')
+                file_ext = os.path.splitext(fp)[1] or '.mp3'
+                display_name = f"{title}{file_ext}" if title else os.path.basename(fp)
+                file_size = os.path.getsize(fp)
                 files.append({
-                    'path': file_path,
-                    'name': os.path.basename(file_path),
+                    'path': fp,
+                    'name': display_name,
                     'size_mb': round(file_size / (1024 * 1024), 2),
-                    'cached': i < len(cached_files),
+                    'cached': True,
                 })
             except OSError as e:
-                logger.warning(f"Could not stat file {file_path}: {e}")
+                logger.warning(f"Could not stat cached file {cf.get('path', '?')}: {e}")
+        # Add newly downloaded files
+        if downloaded_files:
+            for file_path in downloaded_files:
+                try:
+                    if not os.path.exists(file_path):
+                        logger.warning(f"[{task_id}] File missing, skipping: {file_path}")
+                        continue
+                    file_size = os.path.getsize(file_path)
+                    files.append({
+                        'path': file_path,
+                        'name': os.path.basename(file_path),
+                        'size_mb': round(file_size / (1024 * 1024), 2),
+                        'cached': False,
+                    })
+                except OSError as e:
+                    logger.warning(f"Could not stat file {file_path}: {e}")
 
         if not files:
             logger.warning(f"[{task_id}] No files available to send")
             ipc.send_response(task_id, 'done', {
                 'playlist_name': playlist_name,
                 'total_tracks_downloaded': new_count,
-                'already_cached': len(cached_files),
+                'already_cached': cached_count,
                 'files': [],
                 'folder_path': output_dir,
                 'warning': 'Tracks downloaded but no files available'
