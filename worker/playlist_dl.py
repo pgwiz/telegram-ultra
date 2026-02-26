@@ -58,6 +58,70 @@ def normalize_playlist_url(url: str) -> str:
     return url
 
 
+async def _validate_archive(archive_path: str, task_id: str) -> int:
+    """Remove stale archive entries where the pool file no longer exists on disk.
+
+    Also cleans the corresponding file_storage DB rows so the track can be
+    re-downloaded and re-tracked correctly.
+
+    Returns the number of entries removed.
+    """
+    if not os.path.exists(archive_path):
+        return 0
+
+    with open(archive_path, 'r') as f:
+        lines = f.readlines()
+
+    if not lines:
+        return 0
+
+    from worker.database import get_database
+    db = await get_database()
+
+    valid = []
+    removed = 0
+
+    for line in lines:
+        parts = line.strip().split()
+        if len(parts) < 2:
+            valid.append(line)
+            continue
+
+        video_id = parts[1]
+
+        # Check file_storage for a pool file matching this video ID
+        cursor = await db.execute(
+            'SELECT physical_path FROM file_storage WHERE youtube_url LIKE ?',
+            (f'%{video_id}%',)
+        )
+        row = await cursor.fetchone()
+
+        if row and row[0] and os.path.exists(row[0]):
+            valid.append(line)  # Pool file exists — keep
+        else:
+            removed += 1
+            logger.info(f"[{task_id}] Stale archive entry (file gone): {video_id}")
+            # Clean DB record so re-download gets fresh tracking
+            if row:
+                await db.execute(
+                    'DELETE FROM user_symlinks WHERE file_hash_sha1 IN '
+                    '(SELECT file_hash_sha1 FROM file_storage WHERE youtube_url LIKE ?)',
+                    (f'%{video_id}%',)
+                )
+                await db.execute(
+                    'DELETE FROM file_storage WHERE youtube_url LIKE ?',
+                    (f'%{video_id}%',)
+                )
+                await db.commit()
+
+    if removed:
+        with open(archive_path, 'w') as f:
+            f.writelines(valid)
+        logger.info(f"[{task_id}] Archive cleaned: {removed} stale, {len(valid)} valid entries remain")
+
+    return removed
+
+
 async def handle_playlist_download(ipc: IPCHandler, task_id: str, request: dict) -> None:
     """
     Download YouTube playlist.
@@ -133,6 +197,12 @@ async def handle_playlist_download(ipc: IPCHandler, task_id: str, request: dict)
         # Pre-scan: check flat playlist entries against archive to report skipped/cached tracks
         archive_path = params.get('archive_file')
         skipped_count = 0
+
+        # Validate archive: remove entries whose pool files were deleted
+        if archive_path and os.path.exists(archive_path):
+            cleaned = await _validate_archive(archive_path, task_id)
+            if cleaned:
+                logger.info(f"[{task_id}] Removed {cleaned} stale archive entries (files were deleted)")
 
         if archive_path and os.path.exists(archive_path) and entries:
             archived_ids = set()
@@ -327,8 +397,13 @@ async def _download_playlist_tracks(ipc: IPCHandler, task_id: str, url: str, out
         if extract_audio:
             command.extend(['-x', '--audio-format', audio_format, '--audio-quality', '0'])
 
-        # Output template - use playlist_index to preserve original YouTube track numbers
-        output_template = os.path.join(output_dir, '%(playlist_index)03d - %(title)s.%(ext)s')
+        # Output template
+        # Radio Mixes may lack playlist_index; use title-only naming for them
+        is_radio_mix = 'list=RD' in url
+        if is_radio_mix:
+            output_template = os.path.join(output_dir, '%(title)s.%(ext)s')
+        else:
+            output_template = os.path.join(output_dir, '%(playlist_index)03d - %(title)s.%(ext)s')
         command.extend(['-o', output_template])
 
         # Cookies
