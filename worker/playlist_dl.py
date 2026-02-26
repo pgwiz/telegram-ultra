@@ -113,22 +113,28 @@ async def _validate_archive(archive_path: str, task_id: str) -> int:
         row = await cursor.fetchone()
 
         if row and row[0] and os.path.exists(row[0]):
-            valid.append(line)  # Pool file exists — keep
-        else:
+            valid.append(line)  # DB record exists, pool file exists — keep
+        elif row and row[0]:
+            # DB record exists but pool file is missing — truly stale
             removed += 1
             logger.info(f"[{task_id}] Stale archive entry (file gone): {video_id}")
             # Clean DB record so re-download gets fresh tracking
-            if row:
-                await db.execute(
-                    'DELETE FROM user_symlinks WHERE file_hash_sha1 IN '
-                    '(SELECT file_hash_sha1 FROM file_storage WHERE youtube_url LIKE ?)',
-                    (f'%{video_id}%',)
-                )
-                await db.execute(
-                    'DELETE FROM file_storage WHERE youtube_url LIKE ?',
-                    (f'%{video_id}%',)
-                )
-                await db.commit()
+            await db.execute(
+                'DELETE FROM user_symlinks WHERE file_hash_sha1 IN '
+                '(SELECT file_hash_sha1 FROM file_storage WHERE youtube_url LIKE ?)',
+                (f'%{video_id}%',)
+            )
+            await db.execute(
+                'DELETE FROM file_storage WHERE youtube_url LIKE ?',
+                (f'%{video_id}%',)
+            )
+            await db.commit()
+        else:
+            # No DB match — can't verify, keep entry to be safe
+            # (playlist tracks store the playlist URL, not individual video URLs,
+            #  so the LIKE '%VIDEO_ID%' query may not match)
+            valid.append(line)
+            logger.debug(f"[{task_id}] Archive entry kept (no DB match): {video_id}")
 
     if removed:
         with open(archive_path, 'w') as f:
@@ -443,6 +449,9 @@ async def _download_playlist_tracks(ipc: IPCHandler, task_id: str, url: str, out
             command.extend(['--js-runtimes', f'node:{node_bin}'])
             command.extend(['--remote-components', 'ejs:github'])
 
+        # Print video ID to stdout after each track finishes (for per-track DB storage)
+        command.extend(['--print', 'after_move:YTDLP_ID\t%(id)s\t%(filepath)s'])
+
         logger.info(f"[{task_id}] Playlist download command: {len(command)} args, url={url[:60]}")
 
         # Execute
@@ -455,8 +464,28 @@ async def _download_playlist_tracks(ipc: IPCHandler, task_id: str, url: str, out
         progress_collector = StreamProgressCollector()
         track_number = 0
         stderr_lines = []  # collect all yt-dlp output for diagnostics
+        # Map filepath → video_id from yt-dlp --print output
+        filepath_to_video_id: Dict[str, str] = {}
 
-        # Read progress
+        # Read stdout for video ID mapping
+        async def read_stdout():
+            try:
+                while True:
+                    line_bytes = await process.stdout.readline()
+                    if not line_bytes:
+                        break
+                    line = line_bytes.decode('utf-8', errors='replace').strip()
+                    if line.startswith('YTDLP_ID\t'):
+                        parts = line.split('\t', 2)
+                        if len(parts) == 3:
+                            vid_id = parts[1]
+                            fpath = parts[2]
+                            filepath_to_video_id[fpath] = vid_id
+                            logger.debug(f"[{task_id}] Track ID mapping: {vid_id} -> {os.path.basename(fpath)}")
+            except Exception as e:
+                logger.debug(f"[{task_id}] Stdout reader ended: {e}")
+
+        # Read progress from stderr
         async def read_output():
             nonlocal track_number
 
@@ -499,7 +528,8 @@ async def _download_playlist_tracks(ipc: IPCHandler, task_id: str, url: str, out
             except Exception as e:
                 logger.error(f"[{task_id}] Error reading output: {e}")
 
-        await read_output()
+        # Read stderr (progress) and stdout (video IDs) concurrently
+        await asyncio.gather(read_output(), read_stdout())
         await process.wait()
 
         # Log yt-dlp exit code and any errors
@@ -525,17 +555,31 @@ async def _download_playlist_tracks(ipc: IPCHandler, task_id: str, url: str, out
                 db = await get_database()
                 user_cid = params.get('user_chat_id', 0)
                 if user_cid:
-                    logger.info(f"[{task_id}] Processing {len(downloaded_files)} files through dedup system")
+                    logger.info(f"[{task_id}] Processing {len(downloaded_files)} files through dedup system (ID mappings: {len(filepath_to_video_id)})")
                     storage_manager = StorageManager(config.DOWNLOAD_DIR)
                     final_paths = []
                     for temp_file in downloaded_files:
                         try:
+                            # Use individual video URL if available, fall back to playlist URL
+                            video_id = filepath_to_video_id.get(temp_file)
+                            if video_id:
+                                track_url = f"https://www.youtube.com/watch?v={video_id}"
+                            else:
+                                # Try matching by basename (yt-dlp may report slightly different paths)
+                                basename = os.path.basename(temp_file)
+                                video_id = next(
+                                    (vid for fp, vid in filepath_to_video_id.items()
+                                     if os.path.basename(fp) == basename),
+                                    None
+                                )
+                                track_url = f"https://www.youtube.com/watch?v={video_id}" if video_id else url
+
                             success, final_path = await storage_manager.store_or_link(
                                 source_file=temp_file,
                                 target_path=temp_file,
                                 database=db,
                                 user_chat_id=user_cid,
-                                youtube_url=url,
+                                youtube_url=track_url,
                                 use_symlink=True,
                             )
                             final_paths.append(final_path if success else temp_file)
