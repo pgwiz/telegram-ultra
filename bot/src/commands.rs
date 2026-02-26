@@ -1407,11 +1407,11 @@ pub async fn execute_download_and_send(
 
                             let fpath = std::path::PathBuf::from(file_path);
                             if fpath.exists() {
-                                let input = teloxide::types::InputFile::file(&fpath);
+                                let input = teloxide::types::InputFile::file(&fpath).file_name(file_name.to_string());
                                 if let Err(e) = bot.send_audio(chat_id, input).await {
                                     warn!("Failed to send audio {}: {}", file_name, e);
                                     // Try as document if audio fails
-                                    let input2 = teloxide::types::InputFile::file(&fpath);
+                                    let input2 = teloxide::types::InputFile::file(&fpath).file_name(file_name.to_string());
                                     let _ = bot.send_document(chat_id, input2).await;
                                 }
 
