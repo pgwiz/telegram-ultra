@@ -123,12 +123,14 @@ async def handle_playlist_download(ipc: IPCHandler, task_id: str, request: dict)
             return
 
         playlist_name = playlist_info.get('title', 'Playlist')
-        total_tracks = playlist_info.get('entry_count', 0)
+        entries = playlist_info.get('entries', [])
+        info_type = playlist_info.get('_type', 'unknown')
+        # yt-dlp uses 'playlist_count' for total; fall back to len(entries)
+        total_tracks = playlist_info.get('playlist_count') or len(entries) or playlist_info.get('entry_count', 0)
 
-        logger.info(f"[{task_id}] Playlist: '{playlist_name}' ({total_tracks} tracks)")
+        logger.info(f"[{task_id}] Playlist: '{playlist_name}' (type={info_type}, {total_tracks} tracks, {len(entries)} entries)")
 
         # Pre-scan: check flat playlist entries against archive to report skipped/cached tracks
-        entries = playlist_info.get('entries', [])
         archive_path = params.get('archive_file')
         skipped_count = 0
 
@@ -350,7 +352,7 @@ async def _download_playlist_tracks(ipc: IPCHandler, task_id: str, url: str, out
             command.extend(['--js-runtimes', f'node:{node_bin}'])
             command.extend(['--remote-components', 'ejs:github'])
 
-        logger.debug(f"[{task_id}] Playlist download command: {command[0]} ... (length: {len(command)})")
+        logger.info(f"[{task_id}] Playlist download command: {len(command)} args, url={url[:60]}")
 
         # Execute
         process = await asyncio.create_subprocess_exec(
@@ -361,6 +363,7 @@ async def _download_playlist_tracks(ipc: IPCHandler, task_id: str, url: str, out
 
         progress_collector = StreamProgressCollector()
         track_number = 0
+        stderr_lines = []  # collect all yt-dlp output for diagnostics
 
         # Read progress
         async def read_output():
@@ -377,6 +380,12 @@ async def _download_playlist_tracks(ipc: IPCHandler, task_id: str, url: str, out
                         break
 
                     line = line_bytes.decode('utf-8', errors='replace').strip()
+                    if not line:
+                        continue
+
+                    logger.debug(f"[{task_id}] yt-dlp: {line}")
+                    stderr_lines.append(line)
+
                     if 'Downloading' in line and 'of' in line:
                         # Extract track progress
                         match = re.search(r'(\d+)/(\d+)', line)
@@ -401,6 +410,13 @@ async def _download_playlist_tracks(ipc: IPCHandler, task_id: str, url: str, out
 
         await read_output()
         await process.wait()
+
+        # Log yt-dlp exit code and any errors
+        if process.returncode != 0:
+            logger.warning(f"[{task_id}] yt-dlp exited with code {process.returncode}")
+            for l in stderr_lines:
+                if 'ERROR' in l or 'WARNING' in l:
+                    logger.warning(f"[{task_id}]   {l}")
 
         # Find downloaded files
         downloaded_files = []
