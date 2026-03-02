@@ -1,6 +1,6 @@
 /// Telegram bot command handlers.
 ///
-/// Handles /start, /help, /download, /dv, /da, /search, /status, /cancel, /ping, /upcook, /chatid.
+/// Handles /start, /help, /download, /dv, /da, /do, /search, /status, /cancel, /ping, /upcook, /chatid.
 use std::sync::Arc;
 use teloxide::prelude::*;
 use teloxide::types::{CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, MessageId, ParseMode, Recipient};
@@ -48,6 +48,8 @@ pub enum Command {
     Dv(String),
     #[command(description = "Download audio (choose quality)")]
     Da(String),
+    #[command(description = "Download from any yt-dlp supported site")]
+    Do(String),
     #[command(description = "Preview and download playlist")]
     Playlist(String),
     #[command(description = "Search YouTube")]
@@ -104,6 +106,7 @@ pub async fn handle_command(
         Command::Download(url) => cmd_download(bot, msg, url, state).await,
         Command::Dv(url) => cmd_download_with_quality(bot, msg, url, DownloadMode::Video, state).await,
         Command::Da(url) => cmd_download_with_quality(bot, msg, url, DownloadMode::Audio, state).await,
+        Command::Do(url) => cmd_direct_download(bot, msg, url, state).await,
         Command::Playlist(url) => cmd_playlist_preview(bot, msg, url, state).await,
         Command::Search(query) => cmd_search(bot, msg, query, state).await,
         Command::Status => cmd_status(bot, msg, state).await,
@@ -368,6 +371,69 @@ async fn cmd_download(
             status_msg_id,
             &short_id,
             "download",
+            &task_id,
+            &request,
+            DownloadMode::Audio,
+            &state,
+        ).await;
+    });
+
+    Ok(())
+}
+
+/// /do <url> - Download from any yt-dlp supported site (generic).
+/// Bypasses the link type detection and sends any URL directly to yt-dlp.
+async fn cmd_direct_download(
+    bot: Bot,
+    msg: Message,
+    url: String,
+    state: Arc<AppState>,
+) -> ResponseResult<()> {
+    let url = url.trim().to_string();
+    if url.is_empty() {
+        bot.send_message(msg.chat.id,
+            "Usage: /do <url>\n\n\
+             Download from any site supported by yt-dlp.\n\
+             Examples:\n\
+             /do https://soundcloud.com/artist/track\n\
+             /do https://vimeo.com/123456\n\
+             /do https://twitter.com/user/status/123"
+        ).await?;
+        return Ok(());
+    }
+
+    // Basic URL validation
+    if !url.starts_with("http://") && !url.starts_with("https://") {
+        bot.send_message(msg.chat.id, "Please provide a valid URL starting with http:// or https://").await?;
+        return Ok(());
+    }
+
+    let task_id = Uuid::new_v4().to_string();
+    let short_id = task_id[..8].to_string();
+    let chat_id = msg.chat.id;
+
+    // Enqueue
+    state.task_queue.enqueue(&task_id, chat_id.0, "youtube_dl").await;
+
+    if let Some(pool) = &state.db_pool {
+        let _ = hermes_shared::db::create_task(pool, &task_id, chat_id.0, "youtube_dl", &url, None).await;
+    }
+
+    let status_msg = bot.send_message(chat_id, format!(
+        "⏳ Task Queued [{}]\n\nSource:\n{}", short_id, url
+    )).await?;
+    let status_msg_id = status_msg.id;
+
+    let out_dir = task_output_dir(&state.download_dir, chat_id.0, &task_id);
+    let request = download_request(&task_id, &url, true, &out_dir, chat_id.0);
+
+    tokio::spawn(async move {
+        let _ = execute_download_and_send(
+            &bot,
+            chat_id,
+            status_msg_id,
+            &short_id,
+            "audio",
             &task_id,
             &request,
             DownloadMode::Audio,

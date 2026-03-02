@@ -220,6 +220,9 @@ async def handle_playlist_download(ipc: IPCHandler, task_id: str, request: dict)
         archive_path = params.get('archive_file')
         skipped_count = 0
         cached_files = []  # Pool file paths for already-archived tracks
+        extract_audio = params.get('extract_audio', False)
+        video_extensions = {'.mp4', '.webm', '.mkv', '.avi', '.mov'}
+        audio_extensions = {'.mp3', '.m4a', '.opus', '.ogg', '.flac', '.wav'}
 
         # Validate archive: remove entries whose pool files were deleted
         if archive_path and os.path.exists(archive_path):
@@ -257,10 +260,21 @@ async def handle_playlist_download(ipc: IPCHandler, task_id: str, request: dict)
                         )
                         row = await cursor.fetchone()
                         if row and row[0] and os.path.exists(row[0]):
-                            db_title = row[1] if row[1] and row[1] != 'unknown' else ''
-                            entry_title = entry.get('title', '')
-                            cached_files.append({'path': row[0], 'title': db_title or entry_title})
-                            logger.info(f"[{task_id}] Cached track found: {vid_id} -> {row[0]}")
+                            # Check format matches requested type
+                            cached_ext = os.path.splitext(row[0])[1].lower()
+                            if extract_audio and cached_ext in video_extensions:
+                                # Have video but want audio — re-download as audio
+                                unfindable_ids.add(vid_id)
+                                logger.info(f"[{task_id}] Cached track {vid_id}: is video but audio requested, re-downloading")
+                            elif not extract_audio and cached_ext in audio_extensions:
+                                # Have audio but want video — re-download as video
+                                unfindable_ids.add(vid_id)
+                                logger.info(f"[{task_id}] Cached track {vid_id}: is audio but video requested, re-downloading")
+                            else:
+                                db_title = row[1] if row[1] and row[1] != 'unknown' else ''
+                                entry_title = entry.get('title', '')
+                                cached_files.append({'path': row[0], 'title': db_title or entry_title})
+                                logger.info(f"[{task_id}] Cached track found: {vid_id} -> {row[0]}")
                         else:
                             # Pool file not findable by video ID — remove from archive
                             # so yt-dlp re-downloads it (will get correct individual URL this time)
