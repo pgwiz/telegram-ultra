@@ -65,7 +65,7 @@ impl DetectedLink {
             | DetectedLink::YoutubeShort { .. }
             | DetectedLink::YoutubeMusic { .. } => "youtube_dl",
             DetectedLink::TelegramFile { .. } => "telegram_forward",
-            DetectedLink::Unsupported { .. } => "unsupported",
+            DetectedLink::Unsupported { .. } => "youtube_dl",
         }
     }
 }

@@ -339,17 +339,7 @@ async fn cmd_download(
             return cmd_telegram_forward(bot, msg, vec![l], state).await;
         }
         Some(l) if l.is_supported() => l,
-        Some(_) => {
-            bot.send_message(msg.chat.id,
-                "❌ Unsupported Link Type\n\n\
-                 Currently supported:\n\
-                 • YouTube videos & playlists\n\
-                 • Telegram channels & groups\n\
-                 • yt-dlp compatible sites\n\n\
-                 Other link types coming soon!"
-            ).await?;
-            return Ok(());
-        }
+        Some(l) => l, // Generic URL — let yt-dlp try it
         None => {
             bot.send_message(msg.chat.id, "❌ Could not detect a valid URL. Please check and try again.").await?;
             return Ok(());
@@ -703,14 +693,7 @@ async fn cmd_download_with_quality(
             bot.send_message(msg.chat.id, "Quality selection is not available for Telegram links. Just paste the link directly.").await?;
             return Ok(());
         }
-        Some(_) => {
-            bot.send_message(msg.chat.id,
-                "This link type is not supported yet.\n\
-                 Currently YouTube and Telegram links are supported.\n\
-                 Other link support coming soon!"
-            ).await?;
-            return Ok(());
-        }
+        Some(l) => l, // Generic URL — let yt-dlp try format listing
         None => {
             bot.send_message(msg.chat.id, "Could not detect a valid YouTube URL.").await?;
             return Ok(());
@@ -2227,12 +2210,9 @@ pub async fn handle_message(
                     cmd_download(bot, msg, first.url().to_string(), state).await?;
                 }
             } else {
-                info!("Unsupported link detected: {}", first.url());
-                bot.send_message(msg.chat.id,
-                    "This link type is not supported yet.\n\
-                     Currently YouTube and Telegram links are supported.\n\
-                     Other link support coming soon!"
-                ).await?;
+                // Generic URL — let yt-dlp try it
+                info!("Generic link detected, passing to yt-dlp: {}", first.url());
+                cmd_download(bot, msg, first.url().to_string(), state).await?;
             }
         }
     }
