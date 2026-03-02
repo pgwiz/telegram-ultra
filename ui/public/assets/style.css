@@ -905,3 +905,28 @@ tr:hover td {
     from { transform: translateX(100%); opacity: 0; }
     to { transform: translateX(0); opacity: 1; }
 }
+
+/* Settings form */
+.setting-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 8px 0;
+    border-bottom: 1px solid rgba(255,255,255,0.06);
+}
+.setting-row:last-child { border-bottom: none; }
+.setting-row label {
+    font-size: 0.88em;
+    color: var(--marble-white);
+    flex: 1;
+}
+.setting-row input,
+.setting-row select {
+    width: 140px;
+    padding: 6px 10px;
+    border-radius: 4px;
+    background: var(--dark-wood);
+    color: var(--marble-white);
+    border: 1px solid var(--aegean-blue);
+    font-size: 0.88em;
+}

@@ -1040,3 +1040,130 @@ pub async fn admin_logs(
         }
     }
 }
+
+// ====== ADMIN SETTINGS ======
+
+/// Default settings with descriptions.
+fn default_settings() -> serde_json::Value {
+    serde_json::json!({
+        "max_concurrent_tasks": { "value": "3", "type": "number", "min": 1, "max": 10, "description": "Maximum simultaneous downloads" },
+        "queue_mode": { "value": "parallel", "type": "select", "options": ["parallel", "sequential"], "description": "Download queue mode" },
+        "rate_limit.search": { "value": "60", "type": "number", "min": 1, "max": 1000, "description": "Search requests per hour per user" },
+        "rate_limit.download": { "value": "20", "type": "number", "min": 1, "max": 500, "description": "Downloads per hour per user" },
+        "rate_limit.playlist": { "value": "10", "type": "number", "min": 1, "max": 100, "description": "Playlist downloads per hour per user" },
+    })
+}
+
+/// GET /api/admin/settings
+pub async fn admin_get_settings(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<(StatusCode, Json<serde_json::Value>), (StatusCode, Json<auth::ErrorBody>)> {
+    let _admin = auth::authenticate_admin(&headers, &state).await?;
+
+    let defaults = default_settings();
+    let defaults_obj = defaults.as_object().unwrap();
+
+    // Build response with DB overrides merged into defaults
+    let mut settings = serde_json::Map::new();
+    match db::get_all_config(&state.pool).await {
+        Ok(pairs) => {
+            let db_map: std::collections::HashMap<String, String> =
+                pairs.into_iter().collect();
+
+            for (key, meta) in defaults_obj {
+                let mut entry = meta.clone();
+                if let Some(db_val) = db_map.get(key) {
+                    entry["value"] = serde_json::Value::String(db_val.clone());
+                }
+                settings.insert(key.clone(), entry);
+            }
+        }
+        Err(e) => {
+            // Return defaults on DB error
+            tracing::warn!("Failed to read config from DB: {}", e);
+            for (key, meta) in defaults_obj {
+                settings.insert(key.clone(), meta.clone());
+            }
+        }
+    }
+
+    Ok((StatusCode::OK, Json(serde_json::json!({ "settings": settings }))))
+}
+
+/// PUT /api/admin/settings - Update settings
+pub async fn admin_update_settings(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(body): Json<serde_json::Value>,
+) -> Result<(StatusCode, Json<serde_json::Value>), (StatusCode, Json<auth::ErrorBody>)> {
+    let _admin = auth::authenticate_admin(&headers, &state).await?;
+
+    let defaults = default_settings();
+    let defaults_obj = defaults.as_object().unwrap();
+    let updates = match body.get("settings").and_then(|v| v.as_object()) {
+        Some(obj) => obj,
+        None => {
+            return Ok((StatusCode::BAD_REQUEST, Json(serde_json::json!({
+                "error": "Missing 'settings' object in request body"
+            }))));
+        }
+    };
+
+    let mut saved = 0u32;
+    for (key, value) in updates {
+        // Only allow known keys
+        let meta = match defaults_obj.get(key) {
+            Some(m) => m,
+            None => continue,
+        };
+
+        let val_str = match value.as_str() {
+            Some(s) => s.to_string(),
+            None => value.to_string().trim_matches('"').to_string(),
+        };
+
+        // Validate based on type
+        let setting_type = meta.get("type").and_then(|v| v.as_str()).unwrap_or("text");
+        match setting_type {
+            "number" => {
+                let num: i64 = match val_str.parse() {
+                    Ok(n) => n,
+                    Err(_) => continue,
+                };
+                let min = meta.get("min").and_then(|v| v.as_i64()).unwrap_or(0);
+                let max = meta.get("max").and_then(|v| v.as_i64()).unwrap_or(i64::MAX);
+                let clamped = num.clamp(min, max);
+                if let Err(e) = db::set_config(&state.pool, key, &clamped.to_string()).await {
+                    tracing::warn!("Failed to set config {}: {}", key, e);
+                    continue;
+                }
+            }
+            "select" => {
+                let options = meta.get("options")
+                    .and_then(|v| v.as_array())
+                    .map(|arr| arr.iter().filter_map(|v| v.as_str()).collect::<Vec<_>>())
+                    .unwrap_or_default();
+                if !options.contains(&val_str.as_str()) {
+                    continue;
+                }
+                if let Err(e) = db::set_config(&state.pool, key, &val_str).await {
+                    tracing::warn!("Failed to set config {}: {}", key, e);
+                    continue;
+                }
+            }
+            _ => {
+                if let Err(e) = db::set_config(&state.pool, key, &val_str).await {
+                    tracing::warn!("Failed to set config {}: {}", key, e);
+                    continue;
+                }
+            }
+        }
+        saved += 1;
+    }
+
+    Ok((StatusCode::OK, Json(serde_json::json!({
+        "message": format!("Saved {} setting(s). Queue/concurrency changes take effect on bot restart.", saved),
+        "saved": saved,
+    }))))
+}

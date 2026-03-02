@@ -1256,17 +1256,19 @@ async fn deliver_file(
             )).await;
         }
     } else if mode == DownloadMode::Video {
-        let input = teloxide::types::InputFile::file(&path);
+        let display_name = path.file_name().and_then(|n| n.to_str()).unwrap_or(filename).to_string();
+        let input = teloxide::types::InputFile::file(&path).file_name(display_name.clone());
         if let Err(e) = bot.send_video(chat_id, input).await {
             warn!("Failed to send video, trying document: {}", e);
-            let input2 = teloxide::types::InputFile::file(&path);
+            let input2 = teloxide::types::InputFile::file(&path).file_name(display_name);
             let _ = bot.send_document(chat_id, input2).await;
         }
     } else {
-        let input = teloxide::types::InputFile::file(&path);
+        let display_name = path.file_name().and_then(|n| n.to_str()).unwrap_or(filename).to_string();
+        let input = teloxide::types::InputFile::file(&path).file_name(display_name.clone());
         if let Err(e) = bot.send_audio(chat_id, input).await {
             warn!("Failed to send audio, trying document: {}", e);
-            let input2 = teloxide::types::InputFile::file(&path);
+            let input2 = teloxide::types::InputFile::file(&path).file_name(display_name);
             let _ = bot.send_document(chat_id, input2).await;
         }
     }
@@ -1407,12 +1409,24 @@ pub async fn execute_download_and_send(
 
                             let fpath = std::path::PathBuf::from(file_path);
                             if fpath.exists() {
+                                let lower_name = file_name.to_lowercase();
+                                let is_video_file = lower_name.ends_with(".mp4")
+                                    || lower_name.ends_with(".webm")
+                                    || lower_name.ends_with(".mkv");
+
                                 let input = teloxide::types::InputFile::file(&fpath).file_name(file_name.to_string());
-                                if let Err(e) = bot.send_audio(chat_id, input).await {
-                                    warn!("Failed to send audio {}: {}", file_name, e);
-                                    // Try as document if audio fails
-                                    let input2 = teloxide::types::InputFile::file(&fpath).file_name(file_name.to_string());
-                                    let _ = bot.send_document(chat_id, input2).await;
+                                if is_video_file {
+                                    if let Err(e) = bot.send_video(chat_id, input).await {
+                                        warn!("Failed to send video {}: {}", file_name, e);
+                                        let input2 = teloxide::types::InputFile::file(&fpath).file_name(file_name.to_string());
+                                        let _ = bot.send_document(chat_id, input2).await;
+                                    }
+                                } else {
+                                    if let Err(e) = bot.send_audio(chat_id, input).await {
+                                        warn!("Failed to send audio {}: {}", file_name, e);
+                                        let input2 = teloxide::types::InputFile::file(&fpath).file_name(file_name.to_string());
+                                        let _ = bot.send_document(chat_id, input2).await;
+                                    }
                                 }
 
                                 // Add delay between sends to avoid rate limiting
@@ -1442,7 +1456,7 @@ pub async fn execute_download_and_send(
 
                             let apath = std::path::PathBuf::from(archive_path);
                             if apath.exists() {
-                                let input = teloxide::types::InputFile::file(&apath);
+                                let input = teloxide::types::InputFile::file(&apath).file_name(archive_name.to_string());
                                 if let Err(e) = bot.send_document(chat_id, input).await {
                                     warn!("Failed to send archive {}: {}", archive_name, e);
                                 }

@@ -129,6 +129,30 @@ async fn main() {
     };
 
     // Initialize task queue
+    // Read concurrency settings from DB config, falling back to env var
+    let max_concurrent = if let Some(ref pool) = db_pool {
+        let db_max = hermes_shared::db::get_config(pool, "max_concurrent_tasks").await
+            .ok()
+            .flatten()
+            .and_then(|v| v.parse::<usize>().ok());
+        let db_mode = hermes_shared::db::get_config(pool, "queue_mode").await
+            .ok()
+            .flatten();
+
+        let effective = if db_mode.as_deref() == Some("sequential") {
+            info!("Queue mode: sequential (forcing concurrency to 1)");
+            1
+        } else if let Some(n) = db_max {
+            let clamped = n.clamp(1, 10);
+            info!("Queue concurrency from DB config: {}", clamped);
+            clamped
+        } else {
+            max_concurrent
+        };
+        effective
+    } else {
+        max_concurrent
+    };
     let task_queue = TaskQueue::new(max_concurrent);
 
     // Initialize callback state store

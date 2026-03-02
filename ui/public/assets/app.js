@@ -47,6 +47,19 @@ class HermesAPI {
         });
         return resp.json();
     }
+
+    async put(path, body) {
+        const resp = await fetch(path, {
+            method: 'PUT',
+            headers: this.headers(),
+            body: JSON.stringify(body),
+        });
+        if (resp.status === 401) {
+            sessionExpired();
+            return null;
+        }
+        return resp.json();
+    }
 }
 
 const api = new HermesAPI();
@@ -446,6 +459,63 @@ async function loadAdminData() {
 }
 
 // =============================================
+// Admin Settings
+// =============================================
+
+async function loadSettings() {
+    const container = document.getElementById('settingsForm');
+    if (!container) return;
+
+    const data = await api.get('/api/admin/settings');
+    if (!data || !data.settings) return;
+
+    let html = '';
+    const keys = Object.keys(data.settings).sort();
+    for (const key of keys) {
+        const meta = data.settings[key];
+        const val = meta.value || '';
+        const desc = meta.description || key;
+        const inputId = 'setting_' + key.replace(/\./g, '_');
+
+        if (meta.type === 'select' && meta.options) {
+            const opts = meta.options.map(function(o) {
+                return '<option value="' + escapeHtml(o) + '"' + (o === val ? ' selected' : '') + '>' + escapeHtml(o) + '</option>';
+            }).join('');
+            html += '<div class="setting-row">'
+                + '<label for="' + inputId + '">' + escapeHtml(desc) + '</label>'
+                + '<select id="' + inputId + '" data-key="' + escapeHtml(key) + '">' + opts + '</select>'
+                + '</div>';
+        } else {
+            var inputType = meta.type === 'number' ? 'number' : 'text';
+            var attrs = '';
+            if (meta.min !== undefined) attrs += ' min="' + meta.min + '"';
+            if (meta.max !== undefined) attrs += ' max="' + meta.max + '"';
+            html += '<div class="setting-row">'
+                + '<label for="' + inputId + '">' + escapeHtml(desc) + '</label>'
+                + '<input type="' + inputType + '" id="' + inputId + '" data-key="' + escapeHtml(key) + '" value="' + escapeHtml(val) + '"' + attrs + '>'
+                + '</div>';
+        }
+    }
+
+    container.innerHTML = html;
+}
+
+async function saveSettings() {
+    const inputs = document.querySelectorAll('#settingsForm [data-key]');
+    if (!inputs.length) return;
+
+    var settings = {};
+    inputs.forEach(function(el) {
+        settings[el.dataset.key] = el.value;
+    });
+
+    const data = await api.put('/api/admin/settings', { settings: settings });
+    if (data) {
+        showToast(data.message || data.error || 'Done', data.error ? 'error' : 'success');
+    }
+}
+
+// =============================================
 // Toast Notifications
 // =============================================
 
@@ -520,6 +590,7 @@ function hermesInit(page) {
             break;
         case 'admin':
             loadAdminData();
+            loadSettings();
             break;
         case 'scheduler':
             // Basic placeholder

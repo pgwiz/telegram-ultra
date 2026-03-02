@@ -286,6 +286,18 @@ class RateLimiter:
             db = await get_database()
             limit = RateLimiter.DEFAULT_LIMITS.get(action, 60)
 
+            # Override with DB config value if set (key: rate_limit.search, etc.)
+            try:
+                config_key = f'rate_limit.{action}'
+                cursor = await db.execute(
+                    'SELECT value FROM config WHERE key = ?', (config_key,)
+                )
+                row = await cursor.fetchone()
+                if row and row[0]:
+                    limit = int(row[0])
+            except Exception:
+                pass  # Use default on any DB/parse error
+
             # Get current window
             now = datetime.now()
             window_start = now - timedelta(hours=1)

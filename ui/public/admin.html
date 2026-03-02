@@ -95,6 +95,18 @@
             <button class="btn btn-danger btn-sm" style="margin-left:8px" onclick="forceCleanup()">Force Cleanup</button>
         </div>
 
+        <!-- System Settings -->
+        <div class="card" style="margin-top:16px">
+            <div class="card-header" style="display:flex; justify-content:space-between; align-items:center">
+                <span>System Settings</span>
+                <button class="btn btn-gold btn-sm" onclick="saveSettings()">Save</button>
+            </div>
+            <div id="settingsForm" style="display:grid; gap:12px; padding:4px 0">
+                <div class="loading"><div class="spinner"></div></div>
+            </div>
+            <p style="font-size:0.75em; color:var(--text-secondary); margin-top:12px">Queue and concurrency changes take effect on bot restart. Rate limits apply immediately.</p>
+        </div>
+
         <!-- System Logs -->
         <div class="card" style="margin-top:16px">
             <div class="card-header" style="display:flex; justify-content:space-between; align-items:center">

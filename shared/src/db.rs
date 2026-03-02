@@ -767,3 +767,38 @@ pub async fn validate_file_download_token(
     .await?;
     Ok(row.map(|(id,)| id))
 }
+
+// ====== CONFIG KEY-VALUE STORE ======
+
+/// Read a config value by key. Returns None if not found.
+pub async fn get_config(pool: &SqlitePool, key: &str) -> Result<Option<String>> {
+    let row: Option<(String,)> = sqlx::query_as(
+        "SELECT value FROM config WHERE key = ?"
+    )
+    .bind(key)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row.map(|(v,)| v))
+}
+
+/// Read all config key-value pairs.
+pub async fn get_all_config(pool: &SqlitePool) -> Result<Vec<(String, String)>> {
+    let rows: Vec<(String, String)> = sqlx::query_as(
+        "SELECT key, value FROM config ORDER BY key"
+    )
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}
+
+/// Insert or update a config value.
+pub async fn set_config(pool: &SqlitePool, key: &str, value: &str) -> Result<()> {
+    sqlx::query(
+        "INSERT INTO config (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value"
+    )
+    .bind(key)
+    .bind(value)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
