@@ -28,9 +28,10 @@
             <li><a href="/dashboard.html">Dashboard</a></li>
             <li><a href="/files.html">Downloads</a></li>
             <li><a href="/scheduler.html">Scheduler</a></li>
-                        <li class="sidebar-section">Reference</li>
+            <li><a href="/settings.html">Settings</a></li>
+            <li class="sidebar-section">Reference</li>
             <li><a href="/help.html">Help</a></li>
-<li class="sidebar-section">Administration</li>
+            <li class="sidebar-section">Administration</li>
             <li class="active" id="adminLink"><a href="/admin.html">Admin Panel</a></li>
         </ul>
     </aside>
@@ -164,6 +165,7 @@
 
         async function refreshAdmin() {
             await loadAdminData();
+            await loadSettings();
             showToast('Data refreshed', 'success');
         }
 

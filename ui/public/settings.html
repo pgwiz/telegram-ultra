@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Hermes - Settings</title>
+    <link rel="stylesheet" href="/assets/style.css">
+</head>
+<body>
+    <!-- Navbar -->
+    <nav class="navbar">
+        <button id="hamburgerBtn" class="navbar-hamburger" aria-label="Toggle menu">
+            <span></span><span></span><span></span>
+        </button>
+        <span class="navbar-brand">Hermes Download Nexus</span>
+        <div class="navbar-links">
+            <span class="session-expiry" id="sessionTimer"></span>
+            <a href="#" onclick="hermesLogout(); return false;">Logout</a>
+        </div>
+    </nav>
+
+    <!-- Mobile sidebar overlay -->
+    <div id="sidebarOverlay" class="sidebar-overlay"></div>
+
+    <!-- Sidebar -->
+    <aside class="sidebar" id="sidebar">
+        <ul class="sidebar-nav">
+            <li><a href="/dashboard.html">Dashboard</a></li>
+            <li><a href="/files.html">Downloads</a></li>
+            <li><a href="/scheduler.html">Scheduler</a></li>
+            <li class="active"><a href="/settings.html">Settings</a></li>
+            <li class="sidebar-section">Reference</li>
+            <li><a href="/help.html">Help</a></li>
+            <li class="sidebar-section">Administration</li>
+            <li id="adminLink" style="display:none"><a href="/admin.html">Admin Panel</a></li>
+        </ul>
+    </aside>
+
+    <!-- Main -->
+    <main class="main-content">
+        <h2 style="font-family:var(--font-heading); margin-bottom:20px; color:var(--marble-white)">Your Preferences</h2>
+
+        <div class="card">
+            <div class="card-header" style="display:flex; justify-content:space-between; align-items:center">
+                <span>Download Preferences</span>
+                <button class="btn btn-gold btn-sm" onclick="saveUserPreferences()">Save</button>
+            </div>
+
+            <div id="prefsForm" style="display:grid; gap:16px; padding:4px 0">
+                <div class="setting-row">
+                    <label for="prefDefaultMode">Default Download Mode</label>
+                    <select id="prefDefaultMode">
+                        <option value="audio">Audio</option>
+                        <option value="video">Video</option>
+                    </select>
+                </div>
+
+                <div class="setting-row">
+                    <label for="prefAudioFormat">Audio Format</label>
+                    <select id="prefAudioFormat">
+                        <option value="mp3">MP3</option>
+                        <option value="m4a">M4A</option>
+                        <option value="opus">Opus</option>
+                        <option value="flac">FLAC</option>
+                    </select>
+                </div>
+
+                <div class="setting-row">
+                    <label for="prefAudioQuality">Audio Quality</label>
+                    <select id="prefAudioQuality">
+                        <option value="0">Best (VBR)</option>
+                        <option value="320">320 kbps</option>
+                        <option value="256">256 kbps</option>
+                        <option value="192">192 kbps</option>
+                        <option value="128">128 kbps</option>
+                    </select>
+                </div>
+
+                <div class="setting-row">
+                    <label for="prefVideoQuality">Video Quality</label>
+                    <select id="prefVideoQuality">
+                        <option value="best">Best Available</option>
+                        <option value="1080">1080p</option>
+                        <option value="720">720p</option>
+                        <option value="480">480p</option>
+                    </select>
+                </div>
+
+                <div class="setting-row">
+                    <label for="prefDedup">Track Deduplication</label>
+                    <select id="prefDedup">
+                        <option value="true">Enabled (skip re-downloads)</option>
+                        <option value="false">Disabled (always re-download)</option>
+                    </select>
+                </div>
+            </div>
+
+            <p style="font-size:0.75em; color:var(--text-secondary); margin-top:12px">
+                These preferences apply to both Telegram bot commands and web dashboard downloads.
+            </p>
+        </div>
+    </main>
+
+    <div class="toast-container" id="toasts"></div>
+    <script src="/assets/app.js"></script>
+    <script>
+        hermesInit('settings');
+    </script>
+</body>
+</html>

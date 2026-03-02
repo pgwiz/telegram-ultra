@@ -110,6 +110,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/auth/verify-otp", post(routes::verify_otp))
         .route("/api/auth/allow-status", get(routes::allow_status))
         .route("/api/auth/quick-login", post(routes::quick_login))
+        .route("/api/auth/token-login", post(routes::token_login))
         .route("/api/bot-info", get(routes::bot_info))
         // Public file download via temporary token (no auth, used for oversized files)
         .route("/api/dl/:task_id", get(routes::public_download_file))
@@ -126,6 +127,9 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/files/history", delete(routes::clear_history))
         .route("/api/files/:id/download", get(routes::download_file))
         .route("/api/files/:id", delete(routes::delete_file))
+        // User preferences
+        .route("/api/user/preferences", get(routes::get_user_preferences))
+        .route("/api/user/preferences", put(routes::update_user_preferences))
         // Admin routes
         .route("/api/admin/stats", get(routes::admin_stats))
         .route("/api/admin/users", get(routes::admin_users))

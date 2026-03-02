@@ -157,3 +157,25 @@ pub struct ArchiveInfo {
     pub size_mb: f64,
     pub path: String,
 }
+
+/// User download preferences (Settings page).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UserPreferences {
+    pub audio_format: String,
+    pub audio_quality: String,
+    pub default_mode: String,
+    pub dedup_enabled: bool,
+    pub video_quality: String,
+}
+
+impl Default for UserPreferences {
+    fn default() -> Self {
+        Self {
+            audio_format: "mp3".to_string(),
+            audio_quality: "0".to_string(),
+            default_mode: "audio".to_string(),
+            dedup_enabled: true,
+            video_quality: "best".to_string(),
+        }
+    }
+}

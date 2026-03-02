@@ -170,12 +170,25 @@ pub fn download_request(
     output_dir: &str,
     user_chat_id: i64,
 ) -> IPCRequest {
+    download_request_prefs(task_id, url, extract_audio, "mp3", "0", output_dir, user_chat_id)
+}
+
+/// Build a YouTube download request with user audio preferences.
+pub fn download_request_prefs(
+    task_id: &str,
+    url: &str,
+    extract_audio: bool,
+    audio_format: &str,
+    audio_quality: &str,
+    output_dir: &str,
+    user_chat_id: i64,
+) -> IPCRequest {
     IPCRequest::new(task_id, IPCAction::YoutubeDl)
         .with_url(url)
         .with_params(serde_json::json!({
             "extract_audio": extract_audio,
-            "audio_format": "mp3",
-            "audio_quality": "0",
+            "audio_format": audio_format,
+            "audio_quality": audio_quality,
             "output_dir": output_dir,
             "user_chat_id": user_chat_id,
         }))
@@ -204,10 +217,16 @@ pub fn playlist_request_opts(
     extract_audio: bool,
     archive_path: Option<&str>,
     user_chat_id: i64,
+    audio_format: Option<&str>,
 ) -> IPCRequest {
+    let af = if extract_audio {
+        audio_format.unwrap_or("mp3")
+    } else {
+        "mp4"
+    };
     let mut params = serde_json::json!({
         "extract_audio": extract_audio,
-        "audio_format": if extract_audio { "mp3" } else { "mp4" },
+        "audio_format": af,
         "output_dir": output_dir,
         "archive_max_size_mb": 100,
         "user_chat_id": user_chat_id,

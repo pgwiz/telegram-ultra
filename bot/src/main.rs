@@ -284,7 +284,7 @@ async fn main() {
         let web_state = state.clone();
         let web_bot = bot.clone();
         tokio::spawn(async move {
-            use hermes_shared::ipc_protocol::download_request;
+            use hermes_shared::ipc_protocol::download_request_prefs;
             let mut interval = tokio::time::interval(std::time::Duration::from_secs(5));
             loop {
                 interval.tick().await;
@@ -323,8 +323,14 @@ async fn main() {
                             let out_dir = commands::task_output_dir(
                                 &web_state.download_dir, task.chat_id, &task_id,
                             );
-                            let request = download_request(
-                                &task_id, &url, !is_video, &out_dir, task.chat_id,
+                            let prefs = match &web_state.db_pool {
+                                Some(pool) => hermes_shared::db::get_user_preferences(pool, task.chat_id).await,
+                                None => hermes_shared::models::UserPreferences::default(),
+                            };
+                            let request = download_request_prefs(
+                                &task_id, &url, !is_video,
+                                &prefs.audio_format, &prefs.audio_quality,
+                                &out_dir, task.chat_id,
                             );
 
                             // Enqueue in task queue

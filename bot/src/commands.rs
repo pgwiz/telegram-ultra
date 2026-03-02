@@ -25,6 +25,12 @@ use crate::callback_state::{
 use crate::link_detector;
 use crate::link_detector::DetectedLink;
 
+/// Read the dashboard base URL from env or use the default.
+fn dashboard_base_url() -> String {
+    std::env::var("DASHBOARD_URL")
+        .unwrap_or_else(|_| "https://tg-herms-bot.pgwiz.cloud".to_string())
+}
+
 /// Build the per-user, per-task output directory path.
 /// Structure: <download_dir>/<chat_id>/<task_id>/
 pub fn task_output_dir(base: &str, chat_id: i64, task_id: &str) -> String {
@@ -32,6 +38,14 @@ pub fn task_output_dir(base: &str, chat_id: i64, task_id: &str) -> String {
         .join(chat_id.to_string())
         .join(task_id);
     path.to_string_lossy().to_string()
+}
+
+/// Load user preferences from DB, falling back to defaults if unavailable.
+async fn load_user_prefs(state: &AppState, chat_id: i64) -> hermes_shared::models::UserPreferences {
+    match &state.db_pool {
+        Some(pool) => hermes_shared::db::get_user_preferences(pool, chat_id).await,
+        None => hermes_shared::models::UserPreferences::default(),
+    }
 }
 
 /// Bot command definitions.
@@ -48,7 +62,7 @@ pub enum Command {
     Dv(String),
     #[command(description = "Download audio (choose quality)")]
     Da(String),
-    #[command(description = "Download from any yt-dlp supported site")]
+    #[command(description = "Download from any site: /do <url>, /do mp3 <url>, /do f <url>")]
     Do(String),
     #[command(description = "Preview and download playlist")]
     Playlist(String),
@@ -66,7 +80,7 @@ pub enum Command {
     Upcook(String),
     #[command(description = "Show your Telegram Chat ID")]
     Chatid,
-    #[command(description = "Open OTP-free login window for N seconds (admin, max 300)")]
+    #[command(description = "Login link: /allow botp, or global window: /allow <secs> (admin)")]
     Allow(String),
     #[command(description = "Toggle track deduplication")]
     DedupToggle,
@@ -124,7 +138,7 @@ pub async fn handle_command(
 /// /start - Welcome message
 async fn cmd_start(bot: Bot, msg: Message) -> ResponseResult<()> {
     let chat_id = msg.chat.id.0;
-    let help_text = "\
+    let help_text = format!("\
 🎵 Hermes Download Bot
 
 Download audio & video from YouTube, Telegram, and more!
@@ -137,6 +151,8 @@ Multiple links? I'll batch download them all.
 /download <url> — Download audio (default)
 /dv <url> — Download video — choose resolution
 /da <url> — Download audio — choose format
+/do <url> — Download best video from any site
+/do mp3 <url> — Download audio from any site
 /playlist <url> — Preview & download playlists
 
 🔍 Search & Browse:
@@ -148,6 +164,7 @@ Multiple links? I'll batch download them all.
 
 ℹ️ Utilities:
 /chatid — Show your Chat ID
+/allow botp — Get a direct dashboard login link
 /ping — Health check
 /help — Show this message
 
@@ -156,8 +173,8 @@ Paste t.me links to forward files from channels.
 Send multiple links for batch operations.
 
 🌐 Web Dashboard:
-https://tg-herms-bot.pgwiz.cloud/
-Log in with your Chat ID to manage downloads";
+{}
+Log in with your Chat ID to manage downloads", dashboard_base_url());
     bot.send_message(msg.chat.id, help_text).await?;
     // Chat ID in monospace so the user can easily copy it
     bot.send_message(msg.chat.id, format!("🔐 Your Chat ID: `{}`", chat_id))
@@ -175,27 +192,78 @@ async fn cmd_help(bot: Bot, msg: Message) -> ResponseResult<()> {
 async fn cmd_chatid(bot: Bot, msg: Message) -> ResponseResult<()> {
     let chat_id = msg.chat.id.0;
     bot.send_message(msg.chat.id, format!(
-        "🔐 Your Chat ID\n\n{}\n\nAccess Dashboard:\nhttps://tg-herms-bot.pgwiz.cloud/\n\nPaste your Chat ID there to log in.",
-        chat_id
+        "🔐 Your Chat ID\n\n{}\n\nAccess Dashboard:\n{}\n\nPaste your Chat ID there to log in.",
+        chat_id, dashboard_base_url()
     )).await?;
     Ok(())
 }
 
-/// /allow N - Open an OTP-free login window for N seconds (admin only, max 300)
+/// /allow - Two modes:
+///   /allow botp [secs] - Per-user OTP bypass with direct login link (any user, default 120s)
+///   /allow <secs>      - Open global OTP-free login window (admin only, max 300)
 async fn cmd_allow(
     bot: Bot,
     msg: Message,
     secs_str: String,
     state: Arc<AppState>,
 ) -> ResponseResult<()> {
-    // Admin-only
-    if state.admin_chat_id != Some(msg.chat.id.0) {
-        bot.send_message(msg.chat.id, "🔒 Access Denied\n\nYou are not authorized to use this command.")
-            .await?;
+    let args = secs_str.trim().to_string();
+
+    // Check for "botp" subcommand — available to ALL users
+    if args.starts_with("botp") {
+        let rest = args.strip_prefix("botp").unwrap_or("").trim();
+        let secs: i64 = if rest.is_empty() {
+            120 // default 2 minutes
+        } else {
+            match rest.parse::<i64>() {
+                Ok(n) if n > 0 && n <= 300 => n,
+                _ => {
+                    bot.send_message(msg.chat.id, "⚠️ Invalid duration.\n\nUsage: /allow botp [seconds]\nDefault: 120, max: 300")
+                        .await?;
+                    return Ok(());
+                }
+            }
+        };
+
+        let pool = match &state.db_pool {
+            Some(p) => p,
+            None => {
+                bot.send_message(msg.chat.id, "❌ Database unavailable").await?;
+                return Ok(());
+            }
+        };
+
+        let chat_id = msg.chat.id.0;
+        let token = format!("{:x}", uuid::Uuid::new_v4());
+
+        match hermes_shared::db::create_user_bypass_session(pool, chat_id, &token, secs).await {
+            Ok(_) => {
+                let login_url = format!("{}/?token={}", dashboard_base_url(), token);
+                bot.send_message(msg.chat.id, format!(
+                    "🔗 Direct Dashboard Login\n\n\
+                     Click to open (expires in {}s):\n{}\n\n\
+                     This is a single-use link.",
+                    secs, login_url
+                )).await?;
+            }
+            Err(e) => {
+                bot.send_message(msg.chat.id, format!("❌ Failed to create login link: {}", e))
+                    .await?;
+            }
+        }
+
         return Ok(());
     }
 
-    let secs: i64 = match secs_str.trim().parse::<i64>() {
+    // Global allow window — admin only
+    if state.admin_chat_id != Some(msg.chat.id.0) {
+        bot.send_message(msg.chat.id,
+            "Usage:\n/allow botp — Get a direct dashboard login link\n/allow botp 60 — Link valid for 60 seconds\n\n(Global /allow <seconds> is admin-only)"
+        ).await?;
+        return Ok(());
+    }
+
+    let secs: i64 = match args.parse::<i64>() {
         Ok(n) if n > 0 && n <= 300 => n,
         Ok(_) => {
             bot.send_message(msg.chat.id, "⚠️ Invalid Duration\n\nSeconds must be between 1 and 300.")
@@ -203,7 +271,7 @@ async fn cmd_allow(
             return Ok(());
         }
         Err(_) => {
-            bot.send_message(msg.chat.id, "⚠️ Invalid Input\n\nUsage: /allow <seconds>\n\nExample: /allow 120")
+            bot.send_message(msg.chat.id, "⚠️ Invalid Input\n\nUsage:\n/allow botp [secs] — Personal login link\n/allow <seconds> — Global OTP-free window (admin)")
                 .await?;
             return Ok(());
         }
@@ -218,7 +286,7 @@ async fn cmd_allow(
 
                 // Create a JWT session for the admin
                 if let Ok(_) = hermes_shared::db::create_jwt_session(pool, admin_id, &token, secs).await {
-                    let dashboard_url = format!("https://tg-herms-bot.pgwiz.cloud/?token={}", token);
+                    let dashboard_url = format!("{}/?token={}", dashboard_base_url(), token);
                     bot.send_message(
                         msg.chat.id,
                         format!(
@@ -230,8 +298,8 @@ async fn cmd_allow(
                     bot.send_message(
                         msg.chat.id,
                         format!(
-                            "✅ Quick Login Window Opened\n\n⏱️ Duration: {} seconds\n\n📋 Your Chat ID:\n{}\n\n🔓 Anyone with this Chat ID can now log in without OTP.\n\n📝 Steps:\n1. Copy your Chat ID above\n2. Go to: https://tg-herms-bot.pgwiz.cloud/\n3. Paste Chat ID to log in\n\n⚠️ This is for emergency access only. Use with caution.",
-                            secs, admin_id
+                            "✅ Quick Login Window Opened\n\n⏱️ Duration: {} seconds\n\n📋 Your Chat ID:\n{}\n\n🔓 Anyone with this Chat ID can now log in without OTP.\n\n📝 Steps:\n1. Copy your Chat ID above\n2. Go to: {}\n3. Paste Chat ID to log in\n\n⚠️ This is for emergency access only. Use with caution.",
+                            secs, admin_id, dashboard_base_url()
                         ),
                     ).await?;
                 }
@@ -360,7 +428,14 @@ async fn cmd_download(
         return Ok(());
     }
 
-    let request = download_request(&task_id, link.url(), true, &out_dir, chat_id.0);
+    let prefs = load_user_prefs(&state, chat_id.0).await;
+    let extract_audio = prefs.default_mode == "audio";
+    let dl_mode = if extract_audio { DownloadMode::Audio } else { DownloadMode::Video };
+    let request = download_request_prefs(
+        &task_id, link.url(), extract_audio,
+        &prefs.audio_format, &prefs.audio_quality,
+        &out_dir, chat_id.0,
+    );
 
     // Spawn download in background so the teloxide handler returns immediately.
     // This prevents blocking all other commands for this chat during the download.
@@ -373,7 +448,7 @@ async fn cmd_download(
             "download",
             &task_id,
             &request,
-            DownloadMode::Audio,
+            dl_mode,
             &state,
         ).await;
     });
@@ -382,23 +457,41 @@ async fn cmd_download(
 }
 
 /// /do <url> - Download from any yt-dlp supported site (generic).
+/// /do mp3 <url> - Download as MP3 audio.
+/// /do f <url> - Show format picker.
 /// Bypasses the link type detection and sends any URL directly to yt-dlp.
 async fn cmd_direct_download(
     bot: Bot,
     msg: Message,
-    url: String,
+    args: String,
     state: Arc<AppState>,
 ) -> ResponseResult<()> {
-    let url = url.trim().to_string();
-    if url.is_empty() {
+    let args = args.trim().to_string();
+    if args.is_empty() {
         bot.send_message(msg.chat.id,
-            "Usage: /do <url>\n\n\
-             Download from any site supported by yt-dlp.\n\
-             Examples:\n\
-             /do https://soundcloud.com/artist/track\n\
-             /do https://vimeo.com/123456\n\
-             /do https://twitter.com/user/status/123"
+            "Usage:\n\
+             /do <url> — Download best video\n\
+             /do mp3 <url> — Download as MP3 audio\n\
+             /do f <url> — Pick format (audio/video quality)\n\n\
+             Supports any yt-dlp compatible site:\n\
+             SoundCloud, Vimeo, Twitter/X, and more."
         ).await?;
+        return Ok(());
+    }
+
+    // Parse subcommand: first token may be "mp3" or "f"
+    let (sub, url) = {
+        let parts: Vec<&str> = args.splitn(2, char::is_whitespace).collect();
+        let first = parts[0].to_lowercase();
+        if (first == "mp3" || first == "f") && parts.len() == 2 {
+            (first, parts[1].trim().to_string())
+        } else {
+            (String::new(), args)
+        }
+    };
+
+    if url.is_empty() {
+        bot.send_message(msg.chat.id, "Please provide a URL after the subcommand.").await?;
         return Ok(());
     }
 
@@ -408,6 +501,16 @@ async fn cmd_direct_download(
         return Ok(());
     }
 
+    // /do f <url> → format picker
+    if sub == "f" {
+        return cmd_download_with_quality(bot, msg, url, DownloadMode::Video, state).await;
+    }
+
+    // /do mp3 <url> → audio, /do <url> → best video
+    let extract_audio = sub == "mp3";
+    let mode = if extract_audio { DownloadMode::Audio } else { DownloadMode::Video };
+    let mode_label = if extract_audio { "audio" } else { "video" };
+
     let task_id = Uuid::new_v4().to_string();
     let short_id = task_id[..8].to_string();
     let chat_id = msg.chat.id;
@@ -416,16 +519,21 @@ async fn cmd_direct_download(
     state.task_queue.enqueue(&task_id, chat_id.0, "youtube_dl").await;
 
     if let Some(pool) = &state.db_pool {
-        let _ = hermes_shared::db::create_task(pool, &task_id, chat_id.0, "youtube_dl", &url, None).await;
+        let _ = hermes_shared::db::create_task(pool, &task_id, chat_id.0, "youtube_dl", &url, Some(mode_label)).await;
     }
 
     let status_msg = bot.send_message(chat_id, format!(
-        "⏳ Task Queued [{}]\n\nSource:\n{}", short_id, url
+        "⏳ Task Queued [{}] ({})\n\nSource:\n{}", short_id, mode_label, url
     )).await?;
     let status_msg_id = status_msg.id;
 
     let out_dir = task_output_dir(&state.download_dir, chat_id.0, &task_id);
-    let request = download_request(&task_id, &url, true, &out_dir, chat_id.0);
+    let prefs = load_user_prefs(&state, chat_id.0).await;
+    let request = download_request_prefs(
+        &task_id, &url, extract_audio,
+        &prefs.audio_format, &prefs.audio_quality,
+        &out_dir, chat_id.0,
+    );
 
     tokio::spawn(async move {
         let _ = execute_download_and_send(
@@ -433,10 +541,10 @@ async fn cmd_direct_download(
             chat_id,
             status_msg_id,
             &short_id,
-            "audio",
+            mode_label,
             &task_id,
             &request,
-            DownloadMode::Audio,
+            mode,
             &state,
         ).await;
     });
@@ -786,7 +894,12 @@ pub async fn handle_callback_query(
 
         let out_dir  = task_output_dir(&state.download_dir, chat_id.0, &task_id);
         let dl_mode  = if is_audio { DownloadMode::Audio } else { DownloadMode::Video };
-        let request  = download_request(&task_id, &url, is_audio, &out_dir, chat_id.0);
+        let prefs    = load_user_prefs(&state, chat_id.0).await;
+        let request  = download_request_prefs(
+            &task_id, &url, is_audio,
+            &prefs.audio_format, &prefs.audio_quality,
+            &out_dir, chat_id.0,
+        );
 
         let state2 = state.clone();
         tokio::spawn(async move {
@@ -932,9 +1045,15 @@ pub async fn handle_callback_query(
         let mode_label = if pf_is_audio { "audio" } else { "video" };
         let is_single  = pending.is_single;
 
+        let prefs = load_user_prefs(&state, pending.chat_id).await;
+
         let (url, ipc_action, request) = if is_single {
             let single_url = extract_single_video_url(&pending.url);
-            let req = download_request(&task_id, &single_url, pf_is_audio, &out_dir, pending.chat_id);
+            let req = download_request_prefs(
+                &task_id, &single_url, pf_is_audio,
+                &prefs.audio_format, &prefs.audio_quality,
+                &out_dir, pending.chat_id,
+            );
             (single_url, "youtube_dl", req)
         } else {
             // Always provide the archive so yt-dlp tracks downloaded video IDs.
@@ -944,6 +1063,7 @@ pub async fn handle_callback_query(
             info!("Playlist download: limit={:?}, url={}, is_audio={}, archive={:?}", pending.limit, &pending.url, pf_is_audio, archive_opt.is_some());
             let req = playlist_request_opts(
                 &task_id, &pending.url, &out_dir, pending.limit, pf_is_audio, archive_opt.as_deref(), pending.chat_id,
+                Some(prefs.audio_format.as_str()),
             );
             (pending.url.clone(), "playlist", req)
         };

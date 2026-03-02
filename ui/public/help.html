@@ -28,6 +28,7 @@
             <li><a href="/dashboard.html">Dashboard</a></li>
             <li><a href="/files.html">Downloads</a></li>
             <li><a href="/scheduler.html">Scheduler</a></li>
+            <li><a href="/settings.html">Settings</a></li>
             <li class="sidebar-section">Reference</li>
             <li class="active"><a href="/help.html">Help</a></li>
             <li class="sidebar-section">Administration</li>
@@ -48,11 +49,14 @@
                     <tr><td><code>/download &lt;url&gt;</code></td><td>Download audio from a YouTube or Telegram URL (default — fast, no format selection)</td></tr>
                     <tr><td><code>/dv &lt;url&gt;</code></td><td>Download video — choose resolution (720p, 1080p, or best available)</td></tr>
                     <tr><td><code>/da &lt;url&gt;</code></td><td>Download audio — choose format (MP3, M4A, or best available)</td></tr>
+                    <tr><td><code>/do &lt;url&gt;</code></td><td>Download from any yt-dlp supported site (SoundCloud, Vimeo, Twitter/X, etc.)</td></tr>
                     <tr><td><code>/playlist &lt;url&gt;</code></td><td>Preview & download playlists — shows first 5 tracks, choose track limit, select audio/video</td></tr>
                     <tr><td><code>/search &lt;query&gt;</code></td><td>Search YouTube, returns 10 clickable results. Tap a result to choose Audio or Video format.</td></tr>
                     <tr><td><code>/status</code></td><td>Show active and recent download tasks with progress</td></tr>
                     <tr><td><code>/cancel &lt;id&gt;</code></td><td>Cancel a queued or running download by its short task ID</td></tr>
                     <tr><td><code>/chatid</code></td><td>Show your Telegram Chat ID (needed to log in to this dashboard)</td></tr>
+                    <tr><td><code>/dedup_toggle</code></td><td>Toggle track deduplication on/off for your downloads</td></tr>
+                    <tr><td><code>/dedup_status</code></td><td>Show current deduplication status and storage stats</td></tr>
                     <tr><td><code>/ping</code></td><td>Health check — confirms the bot is running and shows worker status</td></tr>
                     <tr><td><code>/help</code></td><td>Show the command summary and this help page</td></tr>
                 </tbody>
@@ -86,7 +90,7 @@
                 Manage your downloads from anywhere using the web dashboard.
             </p>
             <ul style="padding-left:20px; line-height:1.9; font-size:0.9rem; color:var(--dark-text)">
-                <li><strong>Dashboard URL:</strong> <a href="https://tg-herms-bot.pgwiz.cloud/" target="_blank" style="color:var(--aegean-dark); text-decoration:underline">https://tg-herms-bot.pgwiz.cloud/</a></li>
+                <li><strong>Dashboard URL:</strong> <a href="/" style="color:var(--aegean-dark); text-decoration:underline" id="dashboardUrl"></a></li>
                 <li><strong>Login:</strong> Use your Chat ID (get it with <code>/chatid</code> command in Telegram)</li>
                 <li><strong>Two-Factor:</strong> OTP code sent to your Telegram account</li>
                 <li><strong>Features:</strong> View downloads, schedule tasks, manage files, and more</li>
@@ -202,6 +206,12 @@
     <script src="/assets/app.js"></script>
     <script>
         hermesInit('help');
+        // Populate dashboard URL dynamically
+        var urlEl = document.getElementById('dashboardUrl');
+        if (urlEl) {
+            urlEl.href = window.location.origin + '/';
+            urlEl.textContent = window.location.origin;
+        }
     </script>
 </body>
 </html>

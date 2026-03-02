@@ -802,3 +802,122 @@ pub async fn set_config(pool: &SqlitePool, key: &str, value: &str) -> Result<()>
     .await?;
     Ok(())
 }
+
+// ====== BYPASS TOKEN SESSIONS ======
+
+/// Create a per-user OTP bypass session token.
+/// The token is stored as `bypass:{token}` in the sessions table.
+pub async fn create_user_bypass_session(
+    pool: &SqlitePool,
+    chat_id: i64,
+    token: &str,
+    ttl_secs: i64,
+) -> Result<()> {
+    let session_token = format!("bypass:{}", token);
+    sqlx::query(
+        "INSERT INTO sessions (token, chat_id, expires_at) VALUES (?, ?, datetime('now', '+' || ? || ' seconds'))"
+    )
+    .bind(&session_token)
+    .bind(chat_id)
+    .bind(ttl_secs)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// Validate a bypass token and return the owning chat_id.
+/// Returns None if the token is missing or expired.
+/// Consumes the token (deletes it after validation).
+pub async fn validate_bypass_token(
+    pool: &SqlitePool,
+    token: &str,
+) -> Result<Option<i64>> {
+    let session_token = format!("bypass:{}", token);
+    let row: Option<(i64,)> = sqlx::query_as(
+        "SELECT chat_id FROM sessions WHERE token = ? AND expires_at > datetime('now')"
+    )
+    .bind(&session_token)
+    .fetch_optional(pool)
+    .await?;
+
+    if let Some((chat_id,)) = row {
+        // Delete the token after use (single-use)
+        sqlx::query("DELETE FROM sessions WHERE token = ?")
+            .bind(&session_token)
+            .execute(pool)
+            .await?;
+        Ok(Some(chat_id))
+    } else {
+        Ok(None)
+    }
+}
+
+// ====== USER PREFERENCES ======
+
+/// Read all preferences for a user, returning defaults for missing values.
+pub async fn get_user_preferences(
+    pool: &SqlitePool,
+    chat_id: i64,
+) -> crate::models::UserPreferences {
+    let defaults = crate::models::UserPreferences::default();
+
+    let row = match sqlx::query(
+        "SELECT audio_format, audio_quality, default_mode, dedup_enabled, video_quality \
+         FROM user_preferences WHERE chat_id = ?"
+    )
+    .bind(chat_id)
+    .fetch_optional(pool)
+    .await
+    {
+        Ok(Some(r)) => r,
+        _ => return defaults,
+    };
+
+    crate::models::UserPreferences {
+        audio_format: row.try_get::<String, _>("audio_format")
+            .unwrap_or(defaults.audio_format),
+        audio_quality: row.try_get::<String, _>("audio_quality")
+            .unwrap_or(defaults.audio_quality),
+        default_mode: row.try_get::<String, _>("default_mode")
+            .unwrap_or(defaults.default_mode),
+        dedup_enabled: row.try_get::<bool, _>("dedup_enabled")
+            .unwrap_or(defaults.dedup_enabled),
+        video_quality: row.try_get::<String, _>("video_quality")
+            .unwrap_or(defaults.video_quality),
+    }
+}
+
+/// Update user preferences (upsert). Accepts a full preferences struct.
+pub async fn update_user_preferences(
+    pool: &SqlitePool,
+    chat_id: i64,
+    prefs: &crate::models::UserPreferences,
+) -> Result<()> {
+    // Ensure user exists
+    sqlx::query("INSERT OR IGNORE INTO users (chat_id) VALUES (?)")
+        .bind(chat_id)
+        .execute(pool)
+        .await?;
+
+    sqlx::query(
+        "INSERT INTO user_preferences (chat_id, audio_format, audio_quality, default_mode, dedup_enabled, video_quality) \
+         VALUES (?, ?, ?, ?, ?, ?) \
+         ON CONFLICT(chat_id) DO UPDATE SET \
+             audio_format = excluded.audio_format, \
+             audio_quality = excluded.audio_quality, \
+             default_mode = excluded.default_mode, \
+             dedup_enabled = excluded.dedup_enabled, \
+             video_quality = excluded.video_quality, \
+             updated_at = CURRENT_TIMESTAMP"
+    )
+    .bind(chat_id)
+    .bind(&prefs.audio_format)
+    .bind(&prefs.audio_quality)
+    .bind(&prefs.default_mode)
+    .bind(prefs.dedup_enabled)
+    .bind(&prefs.video_quality)
+    .execute(pool)
+    .await?;
+
+    Ok(())
+}

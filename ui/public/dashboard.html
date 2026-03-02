@@ -28,9 +28,10 @@
             <li class="active"><a href="/dashboard.html">Dashboard</a></li>
             <li><a href="/files.html">Downloads</a></li>
             <li><a href="/scheduler.html">Scheduler</a></li>
-                        <li class="sidebar-section">Reference</li>
+            <li><a href="/settings.html">Settings</a></li>
+            <li class="sidebar-section">Reference</li>
             <li><a href="/help.html">Help</a></li>
-<li class="sidebar-section">Administration</li>
+            <li class="sidebar-section">Administration</li>
             <li id="adminLink" style="display:none"><a href="/admin.html">Admin Panel</a></li>
         </ul>
     </aside>
@@ -48,8 +49,8 @@
             <div id="singleMode">
                 <div style="display:flex; gap:12px; align-items:flex-end; flex-wrap:wrap">
                     <div class="form-group" style="flex:1; min-width:250px; margin-bottom:0">
-                        <label class="form-label" for="quickUrl">YouTube URL</label>
-                        <input type="text" id="quickUrl" class="form-input" placeholder="https://youtube.com/watch?v=...">
+                        <label class="form-label" for="quickUrl">URL</label>
+                        <input type="text" id="quickUrl" class="form-input" placeholder="YouTube, SoundCloud, Vimeo, or any yt-dlp URL">
                     </div>
                     <div class="form-group" style="margin-bottom:0">
                         <label class="form-label" for="quickType">Type</label>
@@ -66,7 +67,7 @@
             <div id="batchMode" style="display:none">
                 <div class="form-group" style="margin-bottom:12px">
                     <label class="form-label" for="batchUrls">Paste URLs (one per line, max 20)</label>
-                    <textarea id="batchUrls" class="form-input" rows="6" placeholder="https://youtube.com/watch?v=...&#10;https://youtube.com/watch?v=...&#10;https://youtu.be/..."></textarea>
+                    <textarea id="batchUrls" class="form-input" rows="6" placeholder="https://youtube.com/watch?v=...&#10;https://soundcloud.com/artist/track&#10;https://vimeo.com/123456"></textarea>
                 </div>
                 <div style="display:flex; gap:12px; align-items:center">
                     <div class="form-group" style="margin-bottom:0">

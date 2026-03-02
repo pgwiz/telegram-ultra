@@ -322,6 +322,61 @@ pub async fn quick_login(
     ))
 }
 
+#[derive(Deserialize)]
+pub struct TokenLoginBody {
+    pub token: String,
+}
+
+/// POST /api/auth/token-login — Login via a bypass token (from /allow botp)
+pub async fn token_login(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<TokenLoginBody>,
+) -> Result<(StatusCode, Json<AuthResponse>), (StatusCode, Json<MessageResponse>)> {
+    let bypass_token = body.token.trim();
+    if bypass_token.is_empty() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(MessageResponse { message: "Token is required".to_string() }),
+        ));
+    }
+
+    let chat_id = match hermes_shared::db::validate_bypass_token(&state.pool, bypass_token).await {
+        Ok(Some(id)) => id,
+        Ok(None) => {
+            return Err((
+                StatusCode::UNAUTHORIZED,
+                Json(MessageResponse { message: "Invalid or expired token".to_string() }),
+            ));
+        }
+        Err(e) => {
+            return Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(MessageResponse { message: format!("Token validation error: {}", e) }),
+            ));
+        }
+    };
+
+    // Ensure user exists
+    let _ = hermes_shared::db::upsert_user(&state.pool, chat_id, None).await;
+
+    let jwt = auth::create_jwt(chat_id, &state.jwt_secret, state.session_ttl)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(MessageResponse { message: e })))?;
+
+    hermes_shared::db::create_jwt_session(&state.pool, chat_id, &jwt, state.session_ttl)
+        .await
+        .map_err(|e| (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(MessageResponse { message: e.to_string() }),
+        ))?;
+
+    info!("Token login successful for chat_id={}", chat_id);
+
+    Ok((
+        StatusCode::OK,
+        Json(AuthResponse { token: jwt, expires_in: state.session_ttl, chat_id }),
+    ))
+}
+
 // ====== DOWNLOAD ROUTE ======
 
 /// POST /api/download - Queue a download from the web dashboard
@@ -1166,4 +1221,101 @@ pub async fn admin_update_settings(
         "message": format!("Saved {} setting(s). Queue/concurrency changes take effect on bot restart.", saved),
         "saved": saved,
     }))))
+}
+
+// ====== USER PREFERENCES ======
+
+/// GET /api/user/preferences
+pub async fn get_user_preferences(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<(StatusCode, Json<serde_json::Value>), (StatusCode, Json<auth::ErrorBody>)> {
+    let user = auth::authenticate(&headers, &state).await?;
+
+    let prefs = db::get_user_preferences(&state.pool, user.chat_id).await;
+    Ok((StatusCode::OK, Json(serde_json::json!({
+        "preferences": prefs
+    }))))
+}
+
+/// PUT /api/user/preferences
+pub async fn update_user_preferences(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(body): Json<serde_json::Value>,
+) -> Result<(StatusCode, Json<serde_json::Value>), (StatusCode, Json<auth::ErrorBody>)> {
+    let user = auth::authenticate(&headers, &state).await?;
+
+    let obj = match body.get("preferences").and_then(|v| v.as_object()) {
+        Some(o) => o,
+        None => {
+            return Ok((StatusCode::BAD_REQUEST, Json(serde_json::json!({
+                "error": "Missing 'preferences' object in request body"
+            }))));
+        }
+    };
+
+    // Start with current preferences as base
+    let mut prefs = db::get_user_preferences(&state.pool, user.chat_id).await;
+
+    // Validate and apply each field
+    if let Some(v) = obj.get("audio_format").and_then(|v| v.as_str()) {
+        if ["mp3", "m4a", "opus", "flac"].contains(&v) {
+            prefs.audio_format = v.to_string();
+        } else {
+            return Ok((StatusCode::BAD_REQUEST, Json(serde_json::json!({
+                "error": "audio_format must be one of: mp3, m4a, opus, flac"
+            }))));
+        }
+    }
+
+    if let Some(v) = obj.get("audio_quality").and_then(|v| v.as_str()) {
+        if ["0", "128", "192", "256", "320"].contains(&v) {
+            prefs.audio_quality = v.to_string();
+        } else {
+            return Ok((StatusCode::BAD_REQUEST, Json(serde_json::json!({
+                "error": "audio_quality must be one of: 0, 128, 192, 256, 320"
+            }))));
+        }
+    }
+
+    if let Some(v) = obj.get("default_mode").and_then(|v| v.as_str()) {
+        if ["audio", "video"].contains(&v) {
+            prefs.default_mode = v.to_string();
+        } else {
+            return Ok((StatusCode::BAD_REQUEST, Json(serde_json::json!({
+                "error": "default_mode must be one of: audio, video"
+            }))));
+        }
+    }
+
+    if let Some(v) = obj.get("dedup_enabled") {
+        if let Some(b) = v.as_bool() {
+            prefs.dedup_enabled = b;
+        } else {
+            return Ok((StatusCode::BAD_REQUEST, Json(serde_json::json!({
+                "error": "dedup_enabled must be a boolean"
+            }))));
+        }
+    }
+
+    if let Some(v) = obj.get("video_quality").and_then(|v| v.as_str()) {
+        if ["best", "1080", "720", "480"].contains(&v) {
+            prefs.video_quality = v.to_string();
+        } else {
+            return Ok((StatusCode::BAD_REQUEST, Json(serde_json::json!({
+                "error": "video_quality must be one of: best, 1080, 720, 480"
+            }))));
+        }
+    }
+
+    match db::update_user_preferences(&state.pool, user.chat_id, &prefs).await {
+        Ok(_) => Ok((StatusCode::OK, Json(serde_json::json!({
+            "message": "Preferences saved",
+            "preferences": prefs,
+        })))),
+        Err(e) => Ok((StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({
+            "error": format!("Failed to save preferences: {}", e)
+        })))),
+    }
 }

@@ -516,6 +516,47 @@ async function saveSettings() {
 }
 
 // =============================================
+// User Preferences
+// =============================================
+
+async function loadUserPreferences() {
+    const data = await api.get('/api/user/preferences');
+    if (!data || !data.preferences) return;
+
+    const p = data.preferences;
+    setSelectValue('prefDefaultMode', p.default_mode);
+    setSelectValue('prefAudioFormat', p.audio_format);
+    setSelectValue('prefAudioQuality', p.audio_quality);
+    setSelectValue('prefVideoQuality', p.video_quality);
+    setSelectValue('prefDedup', String(p.dedup_enabled));
+}
+
+async function saveUserPreferences() {
+    const prefs = {
+        default_mode:  getSelectValue('prefDefaultMode'),
+        audio_format:  getSelectValue('prefAudioFormat'),
+        audio_quality: getSelectValue('prefAudioQuality'),
+        video_quality: getSelectValue('prefVideoQuality'),
+        dedup_enabled: getSelectValue('prefDedup') === 'true',
+    };
+
+    const data = await api.put('/api/user/preferences', { preferences: prefs });
+    if (data) {
+        showToast(data.message || data.error || 'Done', data.error ? 'error' : 'success');
+    }
+}
+
+function setSelectValue(id, val) {
+    const el = document.getElementById(id);
+    if (el && val !== undefined) el.value = String(val);
+}
+
+function getSelectValue(id) {
+    const el = document.getElementById(id);
+    return el ? el.value : '';
+}
+
+// =============================================
 // Toast Notifications
 // =============================================
 
@@ -594,6 +635,9 @@ function hermesInit(page) {
             break;
         case 'scheduler':
             // Basic placeholder
+            break;
+        case 'settings':
+            loadUserPreferences();
             break;
         case 'help':
             // Static page, no data to load
