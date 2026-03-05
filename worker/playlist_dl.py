@@ -465,7 +465,6 @@ async def _get_playlist_info(task_id: str, url: str) -> Optional[Dict[str, Any]]
         node_bin = find_node_binary()
         if node_bin:
             command.extend(['--js-runtimes', f'node:{node_bin}'])
-            command.extend(['--remote-components', 'ejs:github'])
 
         process = await asyncio.create_subprocess_exec(
             *command,
@@ -564,7 +563,6 @@ async def _download_playlist_tracks(ipc: IPCHandler, task_id: str, url: str, out
         node_bin = find_node_binary()
         if node_bin:
             command.extend(['--js-runtimes', f'node:{node_bin}'])
-            command.extend(['--remote-components', 'ejs:github'])
 
         # Print video ID to stdout after each track finishes (for per-track DB storage)
         command.extend(['--print', 'after_move:YTDLP_ID\t%(id)s\t%(filepath)s'])

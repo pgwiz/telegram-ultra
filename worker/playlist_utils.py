@@ -86,7 +86,6 @@ async def get_playlist_preview(url: str, preview_count: int = 5) -> Optional[Dic
         node_bin = find_node_binary()
         if node_bin:
             command.extend(['--js-runtimes', f'node:{node_bin}'])
-            command.extend(['--remote-components', 'ejs:github'])
 
         process = await asyncio.create_subprocess_exec(
             *command,
