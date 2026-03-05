@@ -64,6 +64,8 @@ pub enum Command {
     Da(String),
     #[command(description = "Download from any site: /do <url>, /do mp3 <url>, /do f <url>")]
     Do(String),
+    #[command(description = "Best quality: /downloadv2 <url> (video) or /downloadv2 mp3 <url> (audio)")]
+    Downloadv2(String),
     #[command(description = "Preview and download playlist")]
     Playlist(String),
     #[command(description = "Download playlist as video")]
@@ -123,6 +125,7 @@ pub async fn handle_command(
         Command::Dv(url) => cmd_download_with_quality(bot, msg, url, DownloadMode::Video, state).await,
         Command::Da(url) => cmd_download_with_quality(bot, msg, url, DownloadMode::Audio, state).await,
         Command::Do(url) => cmd_direct_download(bot, msg, url, state).await,
+        Command::Downloadv2(args) => cmd_download_v2(bot, msg, args, state).await,
         Command::Playlist(url) => cmd_playlist_preview(bot, msg, url, state, false).await,
         Command::Playlistv2(url) => cmd_playlist_preview(bot, msg, url, state, true).await,
         Command::Search(query) => cmd_search(bot, msg, query, state).await,
@@ -527,6 +530,103 @@ async fn cmd_direct_download(
         &prefs.audio_format, &prefs.audio_quality,
         &out_dir, chat_id.0,
     );
+
+    tokio::spawn(async move {
+        let _ = execute_download_and_send(
+            &bot,
+            chat_id,
+            status_msg_id,
+            &short_id,
+            mode_label,
+            &task_id,
+            &request,
+            mode,
+            &state,
+        ).await;
+    });
+
+    Ok(())
+}
+
+/// /downloadv2 <url> - Best quality video (no height cap).
+/// /downloadv2 mp3 <url> - Best quality audio (quality 0 = best VBR).
+async fn cmd_download_v2(
+    bot: Bot,
+    msg: Message,
+    args: String,
+    state: Arc<AppState>,
+) -> ResponseResult<()> {
+    let args = args.trim().to_string();
+    if args.is_empty() {
+        bot.send_message(msg.chat.id,
+            "Usage:\n\
+             /downloadv2 <url> — Best quality video (no resolution cap)\n\
+             /downloadv2 mp3 <url> — Best quality audio\n\n\
+             Supports any yt-dlp compatible site."
+        ).await?;
+        return Ok(());
+    }
+
+    // Parse subcommand: first token may be "mp3"
+    let (sub, url) = {
+        let parts: Vec<&str> = args.splitn(2, char::is_whitespace).collect();
+        let first = parts[0].to_lowercase();
+        if first == "mp3" && parts.len() == 2 {
+            (first, parts[1].trim().to_string())
+        } else {
+            (String::new(), args)
+        }
+    };
+
+    if url.is_empty() {
+        bot.send_message(msg.chat.id, "Please provide a URL after the subcommand.").await?;
+        return Ok(());
+    }
+
+    if !url.starts_with("http://") && !url.starts_with("https://") {
+        bot.send_message(msg.chat.id, "Please provide a valid URL starting with http:// or https://").await?;
+        return Ok(());
+    }
+
+    let extract_audio = sub == "mp3";
+    let mode = if extract_audio { DownloadMode::Audio } else { DownloadMode::Video };
+    let mode_label = if extract_audio { "audio (best)" } else { "video (best)" };
+
+    let task_id = Uuid::new_v4().to_string();
+    let short_id = task_id[..8].to_string();
+    let chat_id = msg.chat.id;
+
+    state.task_queue.enqueue(&task_id, chat_id.0, "youtube_dl").await;
+
+    if let Some(pool) = &state.db_pool {
+        let _ = hermes_shared::db::create_task(pool, &task_id, chat_id.0, "youtube_dl", &url, Some(mode_label)).await;
+    }
+
+    let status_msg = bot.send_message(chat_id, format!(
+        "⏳ Task Queued [{}] ({})\n\nSource:\n{}", short_id, mode_label, url
+    )).await?;
+    let status_msg_id = status_msg.id;
+
+    let out_dir = task_output_dir(&state.download_dir, chat_id.0, &task_id);
+    let prefs = load_user_prefs(&state, chat_id.0).await;
+
+    // Build IPC request with best-quality format strings (no height cap)
+    let mut params = serde_json::json!({
+        "extract_audio": extract_audio,
+        "audio_format": prefs.audio_format,
+        "audio_quality": "0",
+        "output_dir": out_dir,
+        "user_chat_id": chat_id.0,
+    });
+    if !extract_audio {
+        // Uncapped video format — no height<=1080 restriction
+        params["format"] = serde_json::json!(
+            "bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best"
+        );
+    }
+    let request = IPCRequest::new(&task_id, IPCAction::YoutubeDl)
+        .with_url(&url)
+        .with_params(params);
 
     tokio::spawn(async move {
         let _ = execute_download_and_send(
