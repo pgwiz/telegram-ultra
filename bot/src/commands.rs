@@ -1100,13 +1100,7 @@ pub async fn handle_callback_query(
         }
         if pc_choice == "s" {
             state.playlist_store.set_single(pc_key, true).await;
-            // If video_only (/playlistv2), skip format selection — download as video directly
-            if pending.video_only {
-                let _ = bot.edit_message_text(chat_id, msg_id, "⏳ Starting video download...").await;
-                // Simulate clicking the "Video" format button
-                handle_playlist_format_download(&bot, &state, pc_key, false).await?;
-                return Ok(());
-            }
+            // Show format selection for both /playlist and /playlistv2
             let buttons = vec![vec![
                 InlineKeyboardButton::callback("🎵 Audio (MP3)", encode_playlist_format(pc_key, true)),
                 InlineKeyboardButton::callback("🎬 Video (MP4)", encode_playlist_format(pc_key, false)),
@@ -1167,19 +1161,7 @@ pub async fn handle_callback_query(
             format!("up to {} tracks", pl_limit)
         };
 
-        // If video_only (/playlistv2), skip format selection — download as video directly
-        if pending.video_only {
-            let _ = bot.delete_message(chat_id, msg_id).await;
-            let status_msg = bot.send_message(chat_id,
-                format!("⏳ Downloading {} as video...", limit_label)
-            ).await;
-            if let Ok(new_msg) = &status_msg {
-                state.playlist_store.set_message_id(pl_key, new_msg.id).await;
-            }
-            handle_playlist_format_download(&bot, &state, pl_key, false).await?;
-            return Ok(());
-        }
-
+        // Show format selection for both /playlist and /playlistv2
         let buttons = vec![vec![
             InlineKeyboardButton::callback("🎵 Audio (MP3)", encode_playlist_format(pl_key, true)),
             InlineKeyboardButton::callback("🎬 Video (MP4)", encode_playlist_format(pl_key, false)),
