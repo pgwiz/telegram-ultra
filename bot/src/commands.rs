@@ -1042,11 +1042,20 @@ pub async fn handle_callback_query(
         return Ok(());
     }
 
-    // Handle playlist preview download (pl_dl:URL) — triggered from preview
+    // Handle playlist preview download (pl_dl:[a|v]:URL) — triggered from preview
     if data.starts_with("pl_dl:") {
         info!("Playlist preview download callback received");
         let _ = bot.answer_callback_query(&q.id).await;
-        let url = &data[6..]; // Extract URL after "pl_dl:"
+        let after_prefix = &data[6..]; // After "pl_dl:"
+
+        // Parse video_only flag: "v:URL" or "a:URL", fall back to plain URL for compat
+        let (is_video_only, url) = if after_prefix.starts_with("v:") {
+            (true, &after_prefix[2..])
+        } else if after_prefix.starts_with("a:") {
+            (false, &after_prefix[2..])
+        } else {
+            (false, after_prefix) // Legacy: no flag prefix
+        };
 
         let chat_id = match q.message { Some(ref m) => m.chat.id, None => return Ok(()) };
         let msg_id  = match q.message { Some(ref m) => m.id,      None => return Ok(()) };
@@ -1059,12 +1068,12 @@ pub async fn handle_callback_query(
             url: url.to_string(),
             chat_id: chat_id.0,
             message_id: msg_id,
-            is_single: false, // This is a playlist, not a single video
-            limit: Some(10), // Default to 10 tracks
-            video_only: false, // pl_dl: comes from /playlist (not /playlistv2)
+            is_single: false,
+            limit: Some(10),
+            video_only: is_video_only,
             created_at: std::time::Instant::now(),
         }).await;
-        info!("Stored playlist pending: chat_id={}, message_id={}", chat_id.0, msg_id);
+        info!("Stored playlist pending: chat_id={}, message_id={}, video_only={}", chat_id.0, msg_id, is_video_only);
 
         // Show track limit selection
         let buttons = vec![
@@ -1851,8 +1860,10 @@ async fn cmd_playlist_preview(
                     msg_text.push_str("\n**Choose how many tracks to download:**");
 
                     // Update message with preview + button
+                    // Encode video_only flag: "pl_dl:v:URL" for video-only, "pl_dl:a:URL" for normal
+                    let dl_flag = if video_only { "v" } else { "a" };
                     let keyboard = InlineKeyboardMarkup::new(vec![
-                        vec![InlineKeyboardButton::callback("⬇️ Download", format!("pl_dl:{}", url))],
+                        vec![InlineKeyboardButton::callback("⬇️ Download", format!("pl_dl:{}:{}", dl_flag, url))],
                     ]);
 
                     bot.edit_message_text(msg.chat.id, status.id, msg_text)
