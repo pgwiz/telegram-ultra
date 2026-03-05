@@ -5,6 +5,16 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Hermes - Help</title>
     <link rel="stylesheet" href="/assets/style.css">
+    <style>
+        .table-section td {
+            background: var(--marble-light);
+            padding-top: 14px !important;
+            padding-bottom: 6px !important;
+            font-size: 0.82em;
+            letter-spacing: 0.03em;
+            border-bottom: none;
+        }
+    </style>
 </head>
 <body>
     <!-- Navbar -->
@@ -46,19 +56,63 @@
                     <tr><th>Command</th><th>Description</th></tr>
                 </thead>
                 <tbody>
-                    <tr><td><code>/download &lt;url&gt;</code></td><td>Download audio from a YouTube or Telegram URL (default — fast, no format selection)</td></tr>
-                    <tr><td><code>/dv &lt;url&gt;</code></td><td>Download video — choose resolution (720p, 1080p, or best available)</td></tr>
-                    <tr><td><code>/da &lt;url&gt;</code></td><td>Download audio — choose format (MP3, M4A, or best available)</td></tr>
-                    <tr><td><code>/do &lt;url&gt;</code></td><td>Download from any yt-dlp supported site (SoundCloud, Vimeo, Twitter/X, etc.)</td></tr>
-                    <tr><td><code>/playlist &lt;url&gt;</code></td><td>Preview & download playlists — shows first 5 tracks, choose track limit, select audio/video</td></tr>
-                    <tr><td><code>/search &lt;query&gt;</code></td><td>Search YouTube, returns 10 clickable results. Tap a result to choose Audio or Video format.</td></tr>
-                    <tr><td><code>/status</code></td><td>Show active and recent download tasks with progress</td></tr>
+                    <!-- Single Downloads -->
+                    <tr class="table-section"><td colspan="2"><strong>Single Downloads</strong></td></tr>
+                    <tr><td><code>/download &lt;url&gt;</code></td><td>Download audio &mdash; fast default, no format selection needed</td></tr>
+                    <tr><td><code>/dv &lt;url&gt;</code></td><td>Download video &mdash; interactive quality picker (720p, 1080p, best)</td></tr>
+                    <tr><td><code>/dv high &lt;url&gt;</code></td><td>Best quality video &mdash; highest resolution available, no 1080p cap</td></tr>
+                    <tr><td><code>/da &lt;url&gt;</code></td><td>Download audio &mdash; interactive format picker (MP3, M4A, Opus)</td></tr>
+                    <tr><td><code>/da high &lt;url&gt;</code></td><td>Best quality audio &mdash; highest bitrate, instant download</td></tr>
+
+                    <!-- Any Site -->
+                    <tr class="table-section"><td colspan="2"><strong>Any Site (yt-dlp)</strong></td></tr>
+                    <tr><td><code>/do &lt;url&gt;</code></td><td>Download best video from any supported site (SoundCloud, Vimeo, Twitter/X, etc.)</td></tr>
+                    <tr><td><code>/do mp3 &lt;url&gt;</code></td><td>Download audio from any supported site</td></tr>
+                    <tr><td><code>/do f &lt;url&gt;</code></td><td>Show format picker for any URL &mdash; choose exact quality</td></tr>
+
+                    <!-- Playlists -->
+                    <tr class="table-section"><td colspan="2"><strong>Playlists</strong></td></tr>
+                    <tr><td><code>/playlist &lt;url&gt;</code></td><td>Preview tracks, choose limit (10/25/50/all), then pick audio or video format</td></tr>
+                    <tr><td><code>/playlistv2 &lt;url&gt;</code></td><td>Preview tracks, choose limit &mdash; always downloads as video (MP4)</td></tr>
+
+                    <!-- Search -->
+                    <tr class="table-section"><td colspan="2"><strong>Search</strong></td></tr>
+                    <tr><td><code>/search &lt;query&gt;</code></td><td>Search YouTube &mdash; 10 clickable results, tap to choose audio or video</td></tr>
+
+                    <!-- Task Management -->
+                    <tr class="table-section"><td colspan="2"><strong>Task Management</strong></td></tr>
+                    <tr><td><code>/status</code></td><td>Show active and recent download tasks with live progress</td></tr>
                     <tr><td><code>/cancel &lt;id&gt;</code></td><td>Cancel a queued or running download by its short task ID</td></tr>
-                    <tr><td><code>/chatid</code></td><td>Show your Telegram Chat ID (needed to log in to this dashboard)</td></tr>
-                    <tr><td><code>/dedup_toggle</code></td><td>Toggle track deduplication on/off for your downloads</td></tr>
-                    <tr><td><code>/dedup_status</code></td><td>Show current deduplication status and storage stats</td></tr>
-                    <tr><td><code>/ping</code></td><td>Health check — confirms the bot is running and shows worker status</td></tr>
-                    <tr><td><code>/help</code></td><td>Show the command summary and this help page</td></tr>
+
+                    <!-- Account & Utilities -->
+                    <tr class="table-section"><td colspan="2"><strong>Account &amp; Utilities</strong></td></tr>
+                    <tr><td><code>/chatid</code></td><td>Show your Telegram Chat ID (needed for dashboard login)</td></tr>
+                    <tr><td><code>/allow botp</code></td><td>Get a direct dashboard login link (no OTP, expires in 2 min)</td></tr>
+                    <tr><td><code>/dedup_toggle</code></td><td>Toggle track deduplication on/off</td></tr>
+                    <tr><td><code>/dedup_status</code></td><td>Show dedup status and storage stats</td></tr>
+                    <tr><td><code>/ping</code></td><td>Health check &mdash; bot alive, worker status</td></tr>
+                    <tr><td><code>/help</code></td><td>Show command summary</td></tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="card">
+            <div class="card-header">Quick Workflows</div>
+            <table>
+                <thead>
+                    <tr><th>Goal</th><th>Command</th></tr>
+                </thead>
+                <tbody>
+                    <tr><td>Grab a song fast</td><td><code>/download &lt;url&gt;</code> &mdash; or just paste the link</td></tr>
+                    <tr><td>Download in 4K / highest resolution</td><td><code>/dv high &lt;url&gt;</code></td></tr>
+                    <tr><td>Get best quality audio</td><td><code>/da high &lt;url&gt;</code></td></tr>
+                    <tr><td>Pick exact video resolution</td><td><code>/dv &lt;url&gt;</code> &mdash; choose from the quality menu</td></tr>
+                    <tr><td>Pick exact audio format</td><td><code>/da &lt;url&gt;</code> &mdash; choose MP3, M4A, Opus, etc.</td></tr>
+                    <tr><td>Download a full playlist</td><td><code>/playlist &lt;url&gt;</code> &mdash; preview &rarr; limit &rarr; audio/video</td></tr>
+                    <tr><td>Playlist as video files</td><td><code>/playlistv2 &lt;url&gt;</code> &mdash; preview &rarr; limit &rarr; auto video</td></tr>
+                    <tr><td>Grab from Twitter/X</td><td><code>/do https://x.com/...</code></td></tr>
+                    <tr><td>SoundCloud &rarr; MP3</td><td><code>/do mp3 https://soundcloud.com/...</code></td></tr>
+                    <tr><td>Quick dashboard access</td><td><code>/allow botp</code> &rarr; tap the link sent by the bot</td></tr>
                 </tbody>
             </table>
         </div>
@@ -75,9 +129,8 @@
                         <td><code>/allow &lt;seconds&gt;</code></td>
                         <td>
                             Open a time-limited OTP-free login window (max 300 seconds).
-                            During the window the <em>Quick Login</em> button appears on the login page —
+                            During the window the <em>Quick Login</em> button appears on the login page &mdash;
                             anyone who knows their Chat ID can log in without receiving an OTP code.
-                            Useful when you need to log in urgently without access to Telegram notifications.
                         </td>
                     </tr>
                 </tbody>
@@ -93,6 +146,7 @@
                 <li><strong>Dashboard URL:</strong> <a href="/" style="color:var(--aegean-dark); text-decoration:underline" id="dashboardUrl"></a></li>
                 <li><strong>Login:</strong> Use your Chat ID (get it with <code>/chatid</code> command in Telegram)</li>
                 <li><strong>Two-Factor:</strong> OTP code sent to your Telegram account</li>
+                <li><strong>Quick Login:</strong> Use <code>/allow botp</code> in Telegram for a direct login link (no OTP)</li>
                 <li><strong>Features:</strong> View downloads, schedule tasks, manage files, and more</li>
             </ul>
         </div>
@@ -137,19 +191,27 @@
                 <tbody>
                     <tr>
                         <td><strong>Audio (default)</strong></td>
-                        <td>Best available audio stream extracted to MP3. Uses <code>bestaudio[ext=m4a]/bestaudio/best</code> with VBR quality 0 (highest).</td>
+                        <td>Best audio stream &rarr; MP3. Format: <code>bestaudio[ext=m4a]/bestaudio/best</code>, VBR quality 0 (highest).</td>
                     </tr>
                     <tr>
-                        <td><strong>Video</strong></td>
-                        <td>Best video up to 1080p merged with best audio, output as MP4. Falls back gracefully if merge is unavailable.</td>
+                        <td><strong>Video (standard)</strong></td>
+                        <td>Up to 1080p merged with best audio &rarr; MP4. Automatic fallback if merge is unavailable.</td>
                     </tr>
                     <tr>
-                        <td><strong>Search results</strong></td>
-                        <td>Tap a search result → choose <em>Audio (MP3)</em> or <em>Video (MP4)</em> before download starts.</td>
+                        <td><strong>Video (high / best)</strong></td>
+                        <td>No resolution cap &mdash; downloads 4K, 8K, or whatever is highest. Use <code>/dv high</code> or <code>/downloadv2</code>.</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Audio (high / best)</strong></td>
+                        <td>Highest bitrate audio available, VBR quality 0. Use <code>/da high</code> or <code>/downloadv2 mp3</code>.</td>
                     </tr>
                     <tr>
                         <td><strong>Playlists</strong></td>
-                        <td>Up to 50 tracks downloaded in sequence. Radio Mix URLs are automatically normalised for reliability.</td>
+                        <td>Batch download up to all tracks. <code>/playlist</code> lets you pick audio or video. <code>/playlistv2</code> auto-selects video.</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Search results</strong></td>
+                        <td>Tap a search result &rarr; choose <em>Audio (MP3)</em> or <em>Video (MP4)</em> before download starts.</td>
                     </tr>
                 </tbody>
             </table>
@@ -165,6 +227,7 @@
                     <tr><td><a href="/dashboard.html"><strong>Dashboard</strong></a></td><td>Submit downloads from the web browser, monitor task progress with live polling.</td></tr>
                     <tr><td><a href="/files.html"><strong>Downloads</strong></a></td><td>Browse completed downloads, download files to your browser, delete old files.</td></tr>
                     <tr><td><a href="/scheduler.html"><strong>Scheduler</strong></a></td><td>Schedule recurring downloads (coming soon).</td></tr>
+                    <tr><td><a href="/settings.html"><strong>Settings</strong></a></td><td>Configure your default download preferences (format, quality, dedup).</td></tr>
                     <tr><td><a href="/admin.html"><strong>Admin Panel</strong></a></td><td>System stats, user management, log viewer. Admin account only.</td></tr>
                 </tbody>
             </table>
@@ -191,7 +254,7 @@
                     </tr>
                     <tr>
                         <td>Login OTP not received</td>
-                        <td>Check that you started the bot first (<code>/start</code>). Ask the admin to run <code>/allow 120</code> for a quick-login window.</td>
+                        <td>Check that you started the bot first (<code>/start</code>). Use <code>/allow botp</code> for a direct login link instead.</td>
                     </tr>
                     <tr>
                         <td>Session expired</td>

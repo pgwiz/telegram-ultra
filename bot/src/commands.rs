@@ -147,40 +147,46 @@ async fn cmd_start(bot: Bot, msg: Message) -> ResponseResult<()> {
     let help_text = format!("\
 🎵 Hermes Download Bot
 
-Download audio & video from YouTube, Telegram, and more!
+Download audio & video from YouTube, Telegram, and 1000+ sites.
 
-📥 Quick Start:
-Just paste a link and I'll download it for you!
-Multiple links? I'll batch download them all.
+━━━━━━━━━━━━━━━━━━━━━━
 
-🎬 Download Commands:
-/download <url> — Download audio (default)
-/dv <url> — Download video — choose resolution
-/da <url> — Download audio — choose format
-/do <url> — Download best video from any site
-/do mp3 <url> — Download audio from any site
-/playlist <url> — Preview & download playlists
+📥 Quick Start
+Paste any link — I'll download it automatically.
+Multiple links? I'll batch them all.
 
-🔍 Search & Browse:
-/search <query> — Search YouTube (10 results)
+🎬 Single Downloads
+/download <url> — Audio (fast, default)
+/dv <url> — Video — pick quality
+/da <url> — Audio — pick format
+/dv high <url> — Best video (no cap)
+/da high <url> — Best audio quality
 
-📊 Manage Downloads:
-/status — Show active & recent tasks
+🌐 Any Site (yt-dlp)
+/do <url> — Best video
+/do mp3 <url> — Audio (MP3)
+/do f <url> — Pick format
+
+📋 Playlists
+/playlist <url> — Preview, choose limit & format
+/playlistv2 <url> — Preview, choose limit (video)
+
+🔍 Search
+/search <query> — YouTube (10 results)
+
+📊 Tasks
+/status — Active & recent downloads
 /cancel <id> — Cancel a download
 
-ℹ️ Utilities:
-/chatid — Show your Chat ID
-/allow botp — Get a direct dashboard login link
+⚙️ Account
+/chatid — Your Chat ID
+/allow botp — Dashboard login link
 /ping — Health check
-/help — Show this message
+/help — This message
 
-💡 Telegram Forwarding:
-Paste t.me links to forward files from channels.
-Send multiple links for batch operations.
+💡 Tip: Forward t.me links to grab files from channels.
 
-🌐 Web Dashboard:
-{}
-Log in with your Chat ID to manage downloads", dashboard_base_url());
+🌐 Dashboard: {}", dashboard_base_url());
     bot.send_message(msg.chat.id, help_text).await?;
     // Chat ID in monospace so the user can easily copy it
     bot.send_message(msg.chat.id, format!("🔐 Your Chat ID: `{}`", chat_id))
@@ -785,9 +791,28 @@ async fn cmd_download_with_quality(
     let url = url.trim().to_string();
     if url.is_empty() {
         let cmd = if mode == DownloadMode::Video { "/dv" } else { "/da" };
-        bot.send_message(msg.chat.id, format!("Usage: {} <youtube-url>", cmd)).await?;
+        let mode_name = mode.as_str();
+        bot.send_message(msg.chat.id, format!(
+            "Usage:\n\
+             {} <url> — Choose {} quality from a menu\n\
+             {} high <url> — Download best {} quality instantly\n\n\
+             Example:\n\
+             {} https://youtu.be/dQw4w9WgXcQ",
+            cmd, mode_name, cmd, mode_name, cmd
+        )).await?;
         return Ok(());
     }
+
+    // Check for "high" subcommand: /dv high <url> or /da high <url>
+    let (is_high, url) = {
+        let parts: Vec<&str> = url.splitn(2, char::is_whitespace).collect();
+        let first = parts[0].to_lowercase();
+        if first == "high" && parts.len() == 2 {
+            (true, parts[1].trim().to_string())
+        } else {
+            (false, url)
+        }
+    };
 
     // Detect link type
     let link = match link_detector::detect_first_link(&url) {
@@ -804,11 +829,61 @@ async fn cmd_download_with_quality(
     };
 
     if link.is_playlist() {
-        bot.send_message(msg.chat.id, "Quality selection is not available for playlists. Use /download instead.").await?;
+        bot.send_message(msg.chat.id, "Quality selection is not available for playlists. Use /playlist instead.").await?;
         return Ok(());
     }
 
     let chat_id = msg.chat.id;
+
+    // /dv high or /da high — best quality direct download, no format picker
+    if is_high {
+        let extract_audio = mode == DownloadMode::Audio;
+        let mode_label = if extract_audio { "audio (best)" } else { "video (best)" };
+
+        let task_id = Uuid::new_v4().to_string();
+        let short_id = task_id[..8].to_string();
+
+        state.task_queue.enqueue(&task_id, chat_id.0, "youtube_dl").await;
+        if let Some(pool) = &state.db_pool {
+            let _ = hermes_shared::db::create_task(pool, &task_id, chat_id.0, "youtube_dl", link.url(), Some(mode_label)).await;
+        }
+
+        let status_msg = bot.send_message(chat_id, format!(
+            "⚡ Best Quality [{}] ({})\n\nSource:\n{}", short_id, mode_label, link.url()
+        )).await?;
+        let status_msg_id = status_msg.id;
+
+        let out_dir = task_output_dir(&state.download_dir, chat_id.0, &task_id);
+        let prefs = load_user_prefs(&state, chat_id.0).await;
+
+        let mut params = serde_json::json!({
+            "extract_audio": extract_audio,
+            "audio_format": prefs.audio_format,
+            "audio_quality": "0",
+            "output_dir": out_dir,
+            "user_chat_id": chat_id.0,
+        });
+        if !extract_audio {
+            // Uncapped video format — no height<=1080 restriction
+            params["format"] = serde_json::json!(
+                "bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best"
+            );
+        }
+        let request = IPCRequest::new(&task_id, IPCAction::YoutubeDl)
+            .with_url(link.url())
+            .with_params(params);
+
+        let dl_mode = mode.clone();
+        tokio::spawn(async move {
+            let _ = execute_download_and_send(
+                &bot, chat_id, status_msg_id, &short_id, mode_label,
+                &task_id, &request, dl_mode, &state,
+            ).await;
+        });
+
+        return Ok(());
+    }
+
     let mode_label = mode.as_str();
 
     let fetching_msg = bot.send_message(chat_id, format!(
@@ -1118,9 +1193,7 @@ pub async fn handle_callback_query(
             .await
         {
             Ok(new_msg) => {
-                // Update pending store with the new message id so status edits work later
                 state.playlist_store.set_message_id(pl_key, new_msg.id).await;
-                // Delete old limit-selection message
                 let _ = bot.delete_message(chat_id, msg_id).await;
                 info!("Sent format selection message (replaced limit selection message)");
             }
