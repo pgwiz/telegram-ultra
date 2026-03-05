@@ -200,6 +200,7 @@ pub struct PlaylistPending {
     pub message_id: MessageId,
     pub limit:      Option<u32>,   // None = all tracks; Some(n) = cap at n
     pub is_single:  bool,          // true = download only this video, not the playlist
+    pub video_only: bool,          // true = /playlistv2 — skip format choice, always video
     pub created_at: std::time::Instant,
 }
 

@@ -66,6 +66,8 @@ pub enum Command {
     Do(String),
     #[command(description = "Preview and download playlist")]
     Playlist(String),
+    #[command(description = "Download playlist as video")]
+    Playlistv2(String),
     #[command(description = "Search YouTube")]
     Search(String),
     #[command(description = "Check task status")]
@@ -121,7 +123,8 @@ pub async fn handle_command(
         Command::Dv(url) => cmd_download_with_quality(bot, msg, url, DownloadMode::Video, state).await,
         Command::Da(url) => cmd_download_with_quality(bot, msg, url, DownloadMode::Audio, state).await,
         Command::Do(url) => cmd_direct_download(bot, msg, url, state).await,
-        Command::Playlist(url) => cmd_playlist_preview(bot, msg, url, state).await,
+        Command::Playlist(url) => cmd_playlist_preview(bot, msg, url, state, false).await,
+        Command::Playlistv2(url) => cmd_playlist_preview(bot, msg, url, state, true).await,
         Command::Search(query) => cmd_search(bot, msg, query, state).await,
         Command::Status => cmd_status(bot, msg, state).await,
         Command::Cancel(task_id) => cmd_cancel(bot, msg, task_id, state).await,
@@ -922,6 +925,13 @@ pub async fn handle_callback_query(
         }
         if pc_choice == "s" {
             state.playlist_store.set_single(pc_key, true).await;
+            // If video_only (/playlistv2), skip format selection — download as video directly
+            if pending.video_only {
+                let _ = bot.edit_message_text(chat_id, msg_id, "⏳ Starting video download...").await;
+                // Simulate clicking the "Video" format button
+                handle_playlist_format_download(&bot, &state, pc_key, false).await?;
+                return Ok(());
+            }
             let buttons = vec![vec![
                 InlineKeyboardButton::callback("🎵 Audio (MP3)", encode_playlist_format(pc_key, true)),
                 InlineKeyboardButton::callback("🎬 Video (MP4)", encode_playlist_format(pc_key, false)),
@@ -982,6 +992,19 @@ pub async fn handle_callback_query(
             format!("up to {} tracks", pl_limit)
         };
 
+        // If video_only (/playlistv2), skip format selection — download as video directly
+        if pending.video_only {
+            let _ = bot.delete_message(chat_id, msg_id).await;
+            let status_msg = bot.send_message(chat_id,
+                format!("⏳ Downloading {} as video...", limit_label)
+            ).await;
+            if let Ok(new_msg) = &status_msg {
+                state.playlist_store.set_message_id(pl_key, new_msg.id).await;
+            }
+            handle_playlist_format_download(&bot, &state, pl_key, false).await?;
+            return Ok(());
+        }
+
         let buttons = vec![vec![
             InlineKeyboardButton::callback("🎵 Audio (MP3)", encode_playlist_format(pl_key, true)),
             InlineKeyboardButton::callback("🎬 Video (MP4)", encode_playlist_format(pl_key, false)),
@@ -1015,73 +1038,7 @@ pub async fn handle_callback_query(
         let pf_key      = parts.get(1).copied().unwrap_or("");
         let pf_is_audio = parts.get(2).copied().unwrap_or("a") == "a";
 
-        let pending = match state.playlist_store.take(pf_key).await {
-            Some(p) => p,
-            None    => return Ok(()),
-        };
-
-        let chat_id    = ChatId(pending.chat_id);
-        let msg_id     = pending.message_id;
-        let task_id    = Uuid::new_v4().to_string();
-        let short_id   = task_id[..8].to_string();
-        let out_dir    = task_output_dir(&state.download_dir, pending.chat_id, &task_id);
-        let mode_label = if pf_is_audio { "audio" } else { "video" };
-        let is_single  = pending.is_single;
-
-        let prefs = load_user_prefs(&state, pending.chat_id).await;
-
-        let (url, ipc_action, request) = if is_single {
-            let single_url = extract_single_video_url(&pending.url);
-            let req = download_request_prefs(
-                &task_id, &single_url, pf_is_audio,
-                &prefs.audio_format, &prefs.audio_quality,
-                &out_dir, pending.chat_id,
-            );
-            (single_url, "youtube_dl", req)
-        } else {
-            // Always provide the archive so yt-dlp tracks downloaded video IDs.
-            // With a limit (e.g. 10 tracks), yt-dlp processes entries 1..N and
-            // skips already-archived ones; the Python pre-scan reports skipped count.
-            let archive_opt = Some(format!("{}/playlist_archive.txt", state.download_dir));
-            info!("Playlist download: limit={:?}, url={}, is_audio={}, archive={:?}", pending.limit, &pending.url, pf_is_audio, archive_opt.is_some());
-            let req = playlist_request_opts(
-                &task_id, &pending.url, &out_dir, pending.limit, pf_is_audio, archive_opt.as_deref(), pending.chat_id,
-                Some(prefs.audio_format.as_str()),
-            );
-            (pending.url.clone(), "playlist", req)
-        };
-
-        state.task_queue.enqueue(&task_id, pending.chat_id, ipc_action).await;
-
-        if let Some(pool) = &state.db_pool {
-            let db_kind = if is_single { "youtube_dl" } else { "playlist" };
-            let _ = hermes_shared::db::create_task(
-                pool, &task_id, pending.chat_id, db_kind, &url, Some(mode_label),
-            ).await;
-        }
-
-        let dl_mode    = if pf_is_audio { DownloadMode::Audio } else { DownloadMode::Video };
-        let kind_label = if is_single { "video" } else { "playlist" };
-
-        // Delete format selection message, send a fresh status message to track progress on
-        let _ = bot.delete_message(chat_id, msg_id).await;
-        let status_msg = bot.send_message(chat_id,
-            format!("Queued {} [{}]", kind_label, short_id)
-        ).await;
-
-        // Use the new status message for progress tracking; fall back to original if send failed
-        let track_msg_id = match status_msg {
-            Ok(ref m) => m.id,
-            Err(_)    => msg_id,
-        };
-
-        let state2 = state.clone();
-        tokio::spawn(async move {
-            let _ = execute_download_and_send(
-                &bot, chat_id, track_msg_id, &short_id,
-                kind_label, &task_id, &request, dl_mode, &state2,
-            ).await;
-        });
+        handle_playlist_format_download(&bot, &state, pf_key, pf_is_audio).await?;
         return Ok(());
     }
 
@@ -1104,6 +1061,7 @@ pub async fn handle_callback_query(
             message_id: msg_id,
             is_single: false, // This is a playlist, not a single video
             limit: Some(10), // Default to 10 tracks
+            video_only: false, // pl_dl: comes from /playlist (not /playlistv2)
             created_at: std::time::Instant::now(),
         }).await;
         info!("Stored playlist pending: chat_id={}, message_id={}", chat_id.0, msg_id);
@@ -1660,18 +1618,101 @@ pub async fn execute_download_and_send(
     Ok(())
 }
 
+/// Shared logic for starting a playlist/single-video download after format is chosen.
+///
+/// Called from both the `pf:` callback handler (user clicked audio/video button)
+/// and directly from the `pl:`/`pc:` handlers when `video_only` is set.
+async fn handle_playlist_format_download(
+    bot: &Bot,
+    state: &Arc<AppState>,
+    key: &str,
+    is_audio: bool,
+) -> ResponseResult<()> {
+    let pending = match state.playlist_store.take(key).await {
+        Some(p) => p,
+        None    => return Ok(()),
+    };
+
+    let chat_id    = ChatId(pending.chat_id);
+    let msg_id     = pending.message_id;
+    let task_id    = Uuid::new_v4().to_string();
+    let short_id   = task_id[..8].to_string();
+    let out_dir    = task_output_dir(&state.download_dir, pending.chat_id, &task_id);
+    let mode_label = if is_audio { "audio" } else { "video" };
+    let is_single  = pending.is_single;
+
+    let prefs = load_user_prefs(state, pending.chat_id).await;
+
+    let (url, ipc_action, request) = if is_single {
+        let single_url = extract_single_video_url(&pending.url);
+        let req = download_request_prefs(
+            &task_id, &single_url, is_audio,
+            &prefs.audio_format, &prefs.audio_quality,
+            &out_dir, pending.chat_id,
+        );
+        (single_url, "youtube_dl", req)
+    } else {
+        let archive_opt = Some(format!("{}/playlist_archive.txt", state.download_dir));
+        info!("Playlist download: limit={:?}, url={}, is_audio={}, archive={:?}", pending.limit, &pending.url, is_audio, archive_opt.is_some());
+        let req = playlist_request_opts(
+            &task_id, &pending.url, &out_dir, pending.limit, is_audio, archive_opt.as_deref(), pending.chat_id,
+            Some(prefs.audio_format.as_str()),
+        );
+        (pending.url.clone(), "playlist", req)
+    };
+
+    state.task_queue.enqueue(&task_id, pending.chat_id, ipc_action).await;
+
+    if let Some(pool) = &state.db_pool {
+        let db_kind = if is_single { "youtube_dl" } else { "playlist" };
+        let _ = hermes_shared::db::create_task(
+            pool, &task_id, pending.chat_id, db_kind, &url, Some(mode_label),
+        ).await;
+    }
+
+    let dl_mode    = if is_audio { DownloadMode::Audio } else { DownloadMode::Video };
+    let kind_label = if is_single { "video" } else { "playlist" };
+
+    // Delete old message, send a fresh status message
+    let _ = bot.delete_message(chat_id, msg_id).await;
+    let status_msg = bot.send_message(chat_id,
+        format!("Queued {} [{}]", kind_label, short_id)
+    ).await;
+
+    let track_msg_id = match status_msg {
+        Ok(ref m) => m.id,
+        Err(_)    => msg_id,
+    };
+
+    let bot2 = bot.clone();
+    let state2 = state.clone();
+    tokio::spawn(async move {
+        let _ = execute_download_and_send(
+            &bot2, chat_id, track_msg_id, &short_id,
+            kind_label, &task_id, &request, dl_mode, &state2,
+        ).await;
+    });
+    Ok(())
+}
+
 /// /playlist <url> - Preview and download playlist
 async fn cmd_playlist_preview(
     bot: Bot,
     msg: Message,
     url: String,
     state: Arc<AppState>,
+    video_only: bool,
 ) -> ResponseResult<()> {
     use hermes_shared::ipc_protocol::{playlist_preview_request, IPCResponse};
 
     let url = url.trim().to_string();
     if url.is_empty() {
-        bot.send_message(msg.chat.id, "🎵 *Download Playlist*\n\nUsage: `/playlist \\<url\\>`\n\nI'll show you a preview of the first few tracks, then you can choose:\n• How many tracks to download\n• Audio or video format\n\nExample:\n`/playlist https://www.youtube.com/playlist?list=...`")
+        let help = if video_only {
+            "🎬 *Download Playlist as Video*\n\nUsage: `/playlistv2 \\<url\\>`\n\nI'll show you a preview of the first few tracks, then you choose how many to download\\.\nAll tracks download as video \\(MP4\\)\\.\n\nExample:\n`/playlistv2 https://www.youtube.com/playlist?list=...`"
+        } else {
+            "🎵 *Download Playlist*\n\nUsage: `/playlist \\<url\\>`\n\nI'll show you a preview of the first few tracks, then you can choose:\n• How many tracks to download\n• Audio or video format\n\nExample:\n`/playlist https://www.youtube.com/playlist?list=...`"
+        };
+        bot.send_message(msg.chat.id, help)
             .parse_mode(ParseMode::MarkdownV2)
             .await?;
         return Ok(());
@@ -1713,6 +1754,7 @@ async fn cmd_playlist_preview(
             message_id: msg.id,
             is_single: false,
             limit: Some(10),
+            video_only,
             created_at: std::time::Instant::now(),
         }).await;
 
@@ -2154,6 +2196,7 @@ async fn cmd_playlist_confirm(
         message_id: sent.id,
         limit:      None,
         is_single:  false,
+        video_only: false,
         created_at: std::time::Instant::now(),
     };
     state.playlist_store.store(key, pending).await;

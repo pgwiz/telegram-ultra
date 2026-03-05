@@ -394,6 +394,7 @@ async def handle_get_formats(ipc: IPCHandler, task_id: str, request: dict) -> No
         node_bin = find_node_binary()
         if node_bin:
             command.extend(['--js-runtimes', f'node:{node_bin}'])
+            command.extend(['--remote-components', 'ejs:github'])
 
         process = await asyncio.create_subprocess_exec(
             *command,
