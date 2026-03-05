@@ -105,6 +105,12 @@ setup_python_venv() {
         warn "No requirements.txt found"
     fi
 
+    # Always upgrade yt-dlp to latest (YouTube anti-bot changes frequently)
+    "$PIP_BIN" install -U yt-dlp -q
+    local ytdlp_ver
+    ytdlp_ver=$("$VENV_DIR/bin/yt-dlp" --version 2>/dev/null || echo "unknown")
+    success "yt-dlp upgraded to $ytdlp_ver"
+
     # Make venv python globally accessible via symlink
     if [[ ! -L /usr/local/bin/hermes-python ]]; then
         ln -sf "$PYTHON_BIN" /usr/local/bin/hermes-python
