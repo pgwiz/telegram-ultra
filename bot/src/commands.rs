@@ -90,6 +90,10 @@ pub enum Command {
     DedupToggle,
     #[command(description = "Show deduplication status")]
     DedupStatus,
+    #[command(description = "off")]
+    Restart,
+    #[command(description = "off")]
+    Update,
 }
 
 /// Shared application state passed to handlers.
@@ -138,6 +142,8 @@ pub async fn handle_command(
         Command::Allow(secs_str) => cmd_allow(bot, msg, secs_str, state).await,
         Command::DedupToggle => cmd_dedup_toggle(bot, msg, state).await,
         Command::DedupStatus => cmd_dedup_status(bot, msg, state).await,
+        Command::Restart => cmd_restart(bot, msg, state).await,
+        Command::Update => cmd_update(bot, msg, state).await,
     }
 }
 
@@ -2523,4 +2529,127 @@ fn progress_bar(percent: u8) -> String {
     let filled = (percent as usize) / 5; // 20 chars total
     let empty = 20_usize.saturating_sub(filled);
     format!("[{}{}]", "=".repeat(filled), " ".repeat(empty))
+}
+
+/// /restart - Restart Hermes services (admin only, silent for non-admin)
+async fn cmd_restart(
+    bot: Bot,
+    msg: Message,
+    state: Arc<AppState>,
+) -> ResponseResult<()> {
+    // Admin-only check — silent ignore for non-admin
+    let is_admin = state.admin_chat_id
+        .map(|id| id == msg.chat.id.0)
+        .unwrap_or(false);
+
+    if !is_admin {
+        return Ok(());
+    }
+
+    bot.send_message(msg.chat.id, "🔄 Restarting Hermes services...")
+        .await?;
+
+    // Execute restart command
+    match tokio::process::Command::new("sudo")
+        .args(["hermes-pgwiz", "restart"])
+        .output()
+        .await
+    {
+        Ok(output) => {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            
+            if output.status.success() {
+                let response = format!(
+                    "✅ Restart Complete\n\n```\n{}\n```",
+                    stdout.trim()
+                );
+                bot.send_message(msg.chat.id, response)
+                    .parse_mode(ParseMode::MarkdownV2)
+                    .await
+                    .ok();
+            } else {
+                let response = format!(
+                    "❌ Restart Failed\n\nExit code: {:?}\n\nstderr:\n```\n{}\n```",
+                    output.status.code(),
+                    stderr.trim()
+                );
+                bot.send_message(msg.chat.id, response)
+                    .parse_mode(ParseMode::MarkdownV2)
+                    .await
+                    .ok();
+            }
+        }
+        Err(e) => {
+            bot.send_message(msg.chat.id, format!("❌ Failed to execute restart: {}", e))
+                .await?;
+        }
+    }
+
+    Ok(())
+}
+
+/// /update - Update Hermes installation (admin only, silent for non-admin)
+async fn cmd_update(
+    bot: Bot,
+    msg: Message,
+    state: Arc<AppState>,
+) -> ResponseResult<()> {
+    // Admin-only check — silent ignore for non-admin
+    let is_admin = state.admin_chat_id
+        .map(|id| id == msg.chat.id.0)
+        .unwrap_or(false);
+
+    if !is_admin {
+        return Ok(());
+    }
+
+    bot.send_message(msg.chat.id, "📦 Updating Hermes... This may take a few minutes.")
+        .await?;
+
+    // Execute update command
+    match tokio::process::Command::new("sudo")
+        .args(["hermes-pgwiz", "update"])
+        .output()
+        .await
+    {
+        Ok(output) => {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            
+            // Strip ANSI escape codes for cleaner output
+            let clean_stdout = strip_ansi_codes(&stdout);
+            
+            if output.status.success() {
+                // Truncate if too long for Telegram (4096 char limit)
+                let truncated = if clean_stdout.len() > 3500 {
+                    format!("...{}", &clean_stdout[clean_stdout.len()-3500..])
+                } else {
+                    clean_stdout
+                };
+                
+                let response = format!("✅ Update Complete\n\n{}", truncated.trim());
+                bot.send_message(msg.chat.id, response).await.ok();
+            } else {
+                let response = format!(
+                    "❌ Update Failed\n\nExit code: {:?}\n\nstderr:\n{}",
+                    output.status.code(),
+                    stderr.trim()
+                );
+                bot.send_message(msg.chat.id, response).await.ok();
+            }
+        }
+        Err(e) => {
+            bot.send_message(msg.chat.id, format!("❌ Failed to execute update: {}", e))
+                .await?;
+        }
+    }
+
+    Ok(())
+}
+
+/// Strip ANSI escape codes from a string.
+fn strip_ansi_codes(s: &str) -> String {
+    let re = regex::Regex::new(r"\x1b\[[0-9;]*m").unwrap();
+    re.replace_all(s, "").to_string()
 }

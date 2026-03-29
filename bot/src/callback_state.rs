@@ -194,6 +194,7 @@ pub fn encode_search_format_callback(prefix: &str, index: usize, is_audio: bool)
 
 /// Pending playlist download — awaiting user choice of scope, limit, and format.
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct PlaylistPending {
     pub url:        String,
     pub chat_id:    i64,
