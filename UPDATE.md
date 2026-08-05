@@ -1,7 +1,7 @@
 # ⚡ pgwiz
 
-> *"Eventual consistency: your data is correct. Just not right now."*
-> — **Anonymous**
+> *"The CAP theorem: you can have consistency, availability, and partition tolerance. Pick two."*
+> — **Eric Brewer**
 
 ---
 
@@ -9,11 +9,11 @@
 
 | | |
 |---|---|
-| **Timestamp** | `2026-08-04 22:07:09 UTC` |
+| **Timestamp** | `2026-08-05 13:07:12 UTC` |
 | **Status** | ✅ Live |
 | **Trigger** | ☕ coffee |
-| **Message** | `left no trace. except this commit.` |
-| **Quote #** | 216 / 900 |
+| **Message** | `in and out. no questions.` |
+| **Quote #** | 217 / 900 |
 
 ---
 
@@ -21,7 +21,7 @@
 
 | Date (UTC) | Status |
 |---|---|
-| 2026-08-04 | ✅ |
+| 2026-08-05 | ✅ |
 
 ---
 
