@@ -1,6 +1,6 @@
 # ⚡ pgwiz
 
-> *"REST: representational state transfer. Or: please just use GET and POST."*
+> *"Webhooks: HTTP callbacks, because polling is for the impatient."*
 > — **Anonymous**
 
 ---
@@ -9,11 +9,11 @@
 
 | | |
 |---|---|
-| **Timestamp** | `2026-08-09 22:07:15 UTC` |
+| **Timestamp** | `2026-08-10 13:07:29 UTC` |
 | **Status** | ✅ Live |
 | **Trigger** | ☕ coffee |
-| **Message** | `the grind continues.` |
-| **Quote #** | 221 / 900 |
+| **Message** | `while you slept, I shipped.` |
+| **Quote #** | 222 / 900 |
 
 ---
 
@@ -21,7 +21,7 @@
 
 | Date (UTC) | Status |
 |---|---|
-| 2026-08-09 | ✅ |
+| 2026-08-10 | ✅ |
 
 ---
 
