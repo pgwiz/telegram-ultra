@@ -1,7 +1,7 @@
 # ⚡ pgwiz
 
-> *"GitOps: because everything should be a pull request, including your infrastructure."*
-> — **Anonymous**
+> *"The twelve-factor app: twelve steps to a slightly less broken cloud app."*
+> — **Heroku**
 
 ---
 
@@ -9,11 +9,11 @@
 
 | | |
 |---|---|
-| **Timestamp** | `2026-08-21 22:07:21 UTC` |
+| **Timestamp** | `2026-08-22 13:07:21 UTC` |
 | **Status** | ✅ Live |
 | **Trigger** | ☕ coffee |
-| **Message** | `the repo remembers everything.` |
-| **Quote #** | 233 / 900 |
+| **Message** | `code is the only truth.` |
+| **Quote #** | 234 / 900 |
 
 ---
 
@@ -21,7 +21,7 @@
 
 | Date (UTC) | Status |
 |---|---|
-| 2026-08-21 | ✅ |
+| 2026-08-22 | ✅ |
 
 ---
 
